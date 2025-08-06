@@ -421,6 +421,14 @@ export default function ChatPage() {
                 <CardTitle className="text-base lg:text-lg">Session Info</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
+                {!isDemo && (
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-600 dark:text-slate-300">Connection</span>
+                    <Badge variant={isConnected ? "default" : "secondary"} className="text-xs">
+                      {isConnecting ? "Connecting..." : isConnected ? "Connected" : "Disconnected"}
+                    </Badge>
+                  </div>
+                )}
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-600 dark:text-slate-300">Expert</span>
                   <span className="font-medium truncate ml-2">{expert.name}</span>

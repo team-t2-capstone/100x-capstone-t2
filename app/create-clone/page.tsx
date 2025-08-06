@@ -1,5 +1,6 @@
 "use client"
 
+import { RequireCreator } from '@/components/auth/protected-route';
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -134,7 +135,7 @@ const pricingTiers = [
   },
 ]
 
-export default function CreateClonePage() {
+function CreateClonePageContent() {
   const [selectedTier, setSelectedTier] = useState(1)
 
   return (
@@ -597,4 +598,12 @@ export default function CreateClonePage() {
       </footer>
     </div>
   )
+}
+
+export default function CreateClonePage() {
+  return (
+    <RequireCreator>
+      <CreateClonePageContent />
+    </RequireCreator>
+  );
 }

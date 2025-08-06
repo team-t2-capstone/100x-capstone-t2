@@ -3,10 +3,14 @@ import { GeistSans } from 'geist/font/sans'
 import { GeistMono } from 'geist/font/mono'
 import './globals.css'
 
+import { AuthProvider } from '@/contexts/auth-context'
+import { Navbar } from '@/components/layout/navbar'
+import { Toaster } from '@/components/ui/toaster'
+
 export const metadata: Metadata = {
-  title: 'v0 App',
-  description: 'Created with v0',
-  generator: 'v0.dev',
+  title: 'CloneAI - Create and Chat with AI Clones',
+  description: 'Create personalized AI versions of professional experts and interact with them through chat, voice, and video.',
+  generator: 'CloneAI',
 }
 
 export default function RootLayout({
@@ -25,7 +29,17 @@ html {
 }
         `}</style>
       </head>
-      <body>{children}</body>
+      <body className={`${GeistSans.variable} ${GeistMono.variable} font-sans`}>
+        <AuthProvider>
+          <div className="flex flex-col min-h-screen">
+            <Navbar />
+            <main className="flex-1">
+              {children}
+            </main>
+          </div>
+          <Toaster />
+        </AuthProvider>
+      </body>
     </html>
   )
 }

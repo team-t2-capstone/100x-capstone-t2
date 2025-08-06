@@ -1,6 +1,9 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
+import { listClones, type CloneResponse } from '@/lib/clone-api'
+import { useAuth } from '@/contexts/auth-context'
+import { toast } from '@/components/ui/use-toast'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
@@ -24,6 +27,7 @@ import {
   Video,
   LogOut,
   User,
+  Loader2,
 } from "lucide-react"
 import Link from "next/link"
 import { motion } from "framer-motion"
@@ -165,15 +169,76 @@ const allExperts = [
   },
 ]
 
+interface ExpertData extends CloneResponse {
+  featured?: boolean;
+  heroImage?: string;
+  credentials?: string[];
+  availability?: string;
+}
+
 export default function DiscoverPage() {
+  const { isAuthenticated } = useAuth()
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedCategory, setSelectedCategory] = useState("all")
   const [priceRange, setPriceRange] = useState([0, 200])
   const [sortBy, setSortBy] = useState("featured")
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid")
+  const [clones, setClones] = useState<ExpertData[]>([])
+  const [loading, setLoading] = useState(true)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+
+  // Fetch clones from API
+  useEffect(() => {
+    const fetchClones = async () => {
+      try {
+        setLoading(true)
+        const response = await listClones({
+          page: currentPage,
+          limit: 20,
+          category: selectedCategory === 'all' ? undefined : selectedCategory,
+          search: searchQuery || undefined,
+          price_min: priceRange[0],
+          price_max: priceRange[1],
+        })
+
+        // Transform clone data to match our interface
+        const transformedClones: ExpertData[] = response.clones.map((clone, index) => ({
+          ...clone,
+          // Add mock data for fields not in API response
+          featured: index < 3, // Make first 3 featured
+          heroImage: `/placeholder.svg?height=300&width=400&text=${encodeURIComponent(clone.name)}`,
+          credentials: clone.expertise_areas?.slice(0, 3) || ['Expert'],
+          availability: 'online',
+          type: clone.category,
+          specialty: clone.description,
+          sessions: clone.total_sessions,
+          priceFrom: clone.base_price,
+          priceTo: Math.floor(clone.base_price * 1.5),
+          avatar: clone.avatar_url || `/placeholder.svg?height=80&width=80`,
+        }))
+
+        setClones(transformedClones)
+        setTotalPages(response.pagination.total_pages)
+      } catch (error) {
+        console.error('Failed to fetch clones:', error)
+        toast({
+          title: "Failed to load clones",
+          description: "Using demo data instead",
+          variant: "destructive",
+        })
+        // Fall back to mock data
+        setClones(allExperts as ExpertData[])
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchClones()
+  }, [currentPage, selectedCategory, searchQuery, priceRange])
 
   const filteredExperts = useMemo(() => {
-    const filtered = allExperts.filter((expert) => {
+    const filtered = clones.filter((expert) => {
       const matchesSearch =
         expert.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         expert.specialty.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -244,23 +309,40 @@ export default function DiscoverPage() {
               </div>
             </div>
             <div className="flex items-center space-x-2 sm:space-x-4">
-              <Link href="/create-clone">
-                <Button variant="ghost" className="hidden sm:inline-flex">
-                  Become a Creator
-                </Button>
-              </Link>
-              <Link href="/profile">
-                <Button variant="outline" size="sm">
-                  <User className="h-4 w-4 mr-2" />
-                  <span className="hidden sm:inline">Profile</span>
-                </Button>
-              </Link>
-              <Link href="/dashboard">
-                <Button size="sm">Dashboard</Button>
-              </Link>
-              <Button variant="ghost" size="sm">
-                <LogOut className="h-4 w-4" />
-              </Button>
+              {isAuthenticated ? (
+                <>
+                  <Link href="/create-clone">
+                    <Button variant="ghost" className="hidden sm:inline-flex">
+                      Become a Creator
+                    </Button>
+                  </Link>
+                  <Link href="/profile">
+                    <Button variant="outline" size="sm">
+                      <User className="h-4 w-4 mr-2" />
+                      <span className="hidden sm:inline">Profile</span>
+                    </Button>
+                  </Link>
+                  <Link href="/dashboard">
+                    <Button size="sm">Dashboard</Button>
+                  </Link>
+                  <Button variant="ghost" size="sm">
+                    <LogOut className="h-4 w-4" />
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Link href="/auth/login">
+                    <Button variant="ghost" size="sm">
+                      Sign In
+                    </Button>
+                  </Link>
+                  <Link href="/auth/signup">
+                    <Button size="sm">
+                      Get Started
+                    </Button>
+                  </Link>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -358,12 +440,22 @@ export default function DiscoverPage() {
         {/* Results Count */}
         <div className="flex items-center justify-between mb-6">
           <p className="text-slate-600 dark:text-slate-300">
-            {filteredExperts.length} expert{filteredExperts.length !== 1 ? "s" : ""} found
+            {loading ? "Loading..." : `${filteredExperts.length} expert${filteredExperts.length !== 1 ? "s" : ""} found`}
           </p>
         </div>
 
+        {/* Loading State */}
+        {loading && (
+          <div className="flex items-center justify-center py-20">
+            <div className="text-center">
+              <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+              <p className="text-slate-600 dark:text-slate-300">Discovering amazing AI experts...</p>
+            </div>
+          </div>
+        )}
+
         {/* Featured Experts Section */}
-        {featuredExperts.length > 0 && (
+        {!loading && featuredExperts.length > 0 && (
           <div className="mb-12">
             <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-6">Featured Experts</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -459,7 +551,7 @@ export default function DiscoverPage() {
         )}
 
         {/* Regular Experts Section */}
-        {regularExperts.length > 0 && (
+        {!loading && regularExperts.length > 0 && (
           <div>
             <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-6">All Experts</h2>
             <div className={viewMode === "grid" ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" : "space-y-4"}>
@@ -620,7 +712,7 @@ export default function DiscoverPage() {
           </div>
         )}
 
-        {filteredExperts.length === 0 && (
+        {!loading && filteredExperts.length === 0 && (
           <div className="text-center py-12">
             <div className="text-slate-400 mb-4">
               <Search className="h-12 w-12 mx-auto" />
@@ -638,6 +730,43 @@ export default function DiscoverPage() {
               }}
             >
               Clear Filters
+            </Button>
+          </div>
+        )}
+
+        {/* Pagination */}
+        {!loading && totalPages > 1 && (
+          <div className="flex items-center justify-center mt-12 space-x-2">
+            <Button
+              variant="outline"
+              onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+              disabled={currentPage === 1}
+              className="bg-transparent"
+            >
+              Previous
+            </Button>
+            
+            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+              const pageNumber = Math.max(1, Math.min(totalPages - 4, currentPage - 2)) + i
+              return (
+                <Button
+                  key={pageNumber}
+                  variant={currentPage === pageNumber ? "default" : "outline"}
+                  onClick={() => setCurrentPage(pageNumber)}
+                  className={currentPage === pageNumber ? "" : "bg-transparent"}
+                >
+                  {pageNumber}
+                </Button>
+              )
+            })}
+            
+            <Button
+              variant="outline"
+              onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+              disabled={currentPage === totalPages}
+              className="bg-transparent"
+            >
+              Next
             </Button>
           </div>
         )}

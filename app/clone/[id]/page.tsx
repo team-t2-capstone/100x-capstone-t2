@@ -1,6 +1,10 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { useParams } from 'next/navigation'
+import { getClone, type CloneResponse } from '@/lib/clone-api'
+import { useAuth } from '@/contexts/auth-context'
+import { toast } from '@/components/ui/use-toast'
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -36,54 +40,35 @@ const expertTypes = {
   legal: { color: "bg-indigo-900", icon: Scale, name: "Legal & Consulting" },
 }
 
-// Mock expert data - in real app this would come from API
-const expert = {
-  id: 1,
-  name: "Dr. Sarah Chen",
-  type: "coaching",
-  specialty: "Life Coach & Therapist",
-  avatar: "/placeholder.svg?height=120&width=120",
-  rating: 4.9,
-  sessions: 1247,
-  responseTime: "< 2 minutes",
-  languages: ["English", "Mandarin"],
+interface ExpertData extends CloneResponse {
+  responseTime: string;
+  languages: string[];
   pricing: {
-    text: { min: 25, max: 50, duration: "30-60 min" },
-    voice: { min: 35, max: 75, duration: "30-60 min" },
-    video: { min: 50, max: 100, duration: "30-60 min" },
-  },
-  bio: "Dr. Sarah Chen is a licensed clinical psychologist with over 15 years of experience helping individuals overcome anxiety, depression, and life transitions. She specializes in cognitive-behavioral therapy (CBT) and mindfulness-based interventions. Dr. Chen has helped thousands of clients develop resilience, improve relationships, and achieve their personal goals.",
-  credentials: [
-    "PhD in Clinical Psychology - Stanford University",
-    "Licensed Clinical Psychologist (CA)",
-    "Certified CBT Therapist",
-    "Mindfulness-Based Stress Reduction (MBSR) Certified",
-    "15+ years of clinical experience",
-    "Published researcher in anxiety and depression treatment",
-  ],
-  expertise: [
-    "Anxiety and Stress Management",
-    "Depression Treatment",
-    "Relationship Counseling",
-    "Life Transitions",
-    "Mindfulness and Meditation",
-    "Cognitive Behavioral Therapy",
-    "Personal Growth and Development",
-    "Work-Life Balance",
-  ],
-  availability: "Available now",
-  featured: true,
+    text: { min: number; max: number; duration: string };
+    voice: { min: number; max: number; duration: string };
+    video: { min: number; max: number; duration: string };
+  };
+  bio: string;
+  credentials: string[];
+  expertise: string[];
+  availability: string;
+  featured: boolean;
+  type: string;
+  specialty: string;
+  sessions: number;
+  priceFrom: number;
+  priceTo: number;
 }
 
-const reviews = [
+// Mock reviews data - in a real app, these would come from API
+const getExampleReviews = (expertName: string) => [
   {
     id: 1,
     user: "Jennifer M.",
     avatar: "/placeholder.svg?height=40&width=40",
     rating: 5,
     date: "2 days ago",
-    content:
-      "Dr. Chen's clone provided incredibly insightful guidance on managing my work anxiety. The \"Dr. Chen's clone provided incredibly insightful guidance on managing my work anxiety. The conversation felt natural and her advice was practical and actionable. Highly recommend!",
+    content: `${expertName}'s AI clone provided incredibly insightful guidance. The conversation felt natural and the advice was practical and actionable. Highly recommend!`,
     sessionType: "Text Chat",
     helpful: 12,
   },
@@ -93,8 +78,7 @@ const reviews = [
     avatar: "/placeholder.svg?height=40&width=40",
     rating: 5,
     date: "1 week ago",
-    content:
-      "Amazing experience! The voice session felt like talking to a real therapist. Dr. Chen's clone helped me work through some relationship issues with great empathy and professional insight.",
+    content: `Amazing experience! The voice session felt authentic. ${expertName}'s clone helped me work through complex issues with great empathy and professional insight.`,
     sessionType: "Voice Call",
     helpful: 8,
   },
@@ -104,60 +88,129 @@ const reviews = [
     avatar: "/placeholder.svg?height=40&width=40",
     rating: 4,
     date: "2 weeks ago",
-    content:
-      "Very helpful for developing coping strategies for stress. The clone remembered our previous conversations and built upon them effectively. Great value for the price.",
+    content: `Very helpful for developing strategies. The clone remembered our previous conversations and built upon them effectively. Great value for the price.`,
     sessionType: "Text Chat",
     helpful: 15,
   },
-  {
-    id: 4,
-    user: "David L.",
-    avatar: "/placeholder.svg?height=40&width=40",
-    rating: 5,
-    date: "3 weeks ago",
-    content:
-      "The video session was incredible - felt like a real therapy appointment. Dr. Chen's clone provided excellent guidance on mindfulness techniques that I still use daily.",
-    sessionType: "Video Call",
-    helpful: 20,
-  },
 ]
 
-const similarExperts = [
+// Mock similar experts - in a real app, these would come from API based on category
+const getSimilarExperts = (category: string) => [
   {
-    id: 5,
-    name: "Dr. Michael Torres",
-    type: "coaching",
-    specialty: "Career & Executive Coach",
+    id: 'similar-1',
+    name: "AI Expert Assistant",
+    type: category,
+    specialty: "Professional Consultant",
     avatar: "/placeholder.svg?height=60&width=60",
     rating: 4.8,
     sessions: 892,
     priceFrom: 40,
   },
   {
-    id: 6,
-    name: "Dr. Amanda Wilson",
-    type: "coaching",
-    specialty: "Relationship Therapist",
+    id: 'similar-2', 
+    name: "Expert Helper",
+    type: category,
+    specialty: "Specialized Advisor",
     avatar: "/placeholder.svg?height=60&width=60",
     rating: 4.7,
     sessions: 1156,
     priceFrom: 30,
   },
   {
-    id: 7,
-    name: "Prof. James Park",
-    type: "coaching",
-    specialty: "Mindfulness & Meditation Expert",
+    id: 'similar-3',
+    name: "Professional Guide",
+    type: category,
+    specialty: "Industry Specialist",
     avatar: "/placeholder.svg?height=60&width=60",
-    rating: 4.9,
+    rating: 4.6,
     sessions: 743,
     priceFrom: 25,
   },
 ]
 
 export default function CloneProfilePage() {
+  const params = useParams()
+  const { user } = useAuth()
   const [selectedTab, setSelectedTab] = useState("overview")
-  const typeConfig = expertTypes[expert.type as keyof typeof expertTypes]
+  const [expert, setExpert] = useState<ExpertData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const cloneId = params.id as string
+
+  // Fetch clone data
+  useEffect(() => {
+    const fetchClone = async () => {
+      try {
+        setLoading(true)
+        const cloneData = await getClone(cloneId)
+        
+        // Transform clone data to match our expert interface
+        const transformedExpert: ExpertData = {
+          ...cloneData,
+          type: cloneData.category || 'coaching',
+          specialty: cloneData.description,
+          sessions: cloneData.total_sessions || 0,
+          priceFrom: cloneData.base_price,
+          priceTo: Math.floor(cloneData.base_price * 1.5),
+          responseTime: "< 2 minutes",
+          languages: ["English"],
+          pricing: {
+            text: { min: cloneData.base_price, max: Math.floor(cloneData.base_price * 1.2), duration: "30-60 min" },
+            voice: { min: Math.floor(cloneData.base_price * 1.4), max: Math.floor(cloneData.base_price * 1.8), duration: "30-60 min" },
+            video: { min: Math.floor(cloneData.base_price * 2), max: Math.floor(cloneData.base_price * 2.5), duration: "30-60 min" },
+          },
+          bio: cloneData.instructions || `${cloneData.name} is an AI clone expert ready to help you with personalized guidance and insights.`,
+          credentials: cloneData.expertise_areas?.slice(0, 6) || ["Expert Professional"],
+          expertise: cloneData.expertise_areas || ["General Consulting"],
+          availability: cloneData.is_published ? "Available now" : "Currently unavailable",
+          featured: false,
+        }
+        
+        setExpert(transformedExpert)
+      } catch (error) {
+        console.error('Failed to fetch clone:', error)
+        setError('Failed to load clone profile')
+        toast({
+          title: "Error",
+          description: "Failed to load clone profile",
+          variant: "destructive",
+        })
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    if (cloneId) {
+      fetchClone()
+    }
+  }, [cloneId])
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-slate-600 dark:text-slate-300">Loading clone profile...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (error || !expert) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">Clone Not Found</h1>
+          <p className="text-slate-600 dark:text-slate-300 mb-4">{error || 'The requested clone could not be found.'}</p>
+          <Link href="/discover">
+            <Button>Browse Other Clones</Button>
+          </Link>
+        </div>
+      </div>
+    )
+  }
+
+  const typeConfig = expertTypes[expert.type as keyof typeof expertTypes] || expertTypes.coaching
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
@@ -194,23 +247,37 @@ export default function CloneProfilePage() {
               </div>
             </div>
             <div className="flex items-center space-x-2 sm:space-x-4">
-              <Link href="/create-clone">
-                <Button variant="ghost" className="hidden sm:inline-flex">
-                  Become a Creator
-                </Button>
-              </Link>
-              <Link href="/profile">
-                <Button variant="outline" size="sm">
-                  <User className="h-4 w-4 mr-2" />
-                  <span className="hidden sm:inline">Profile</span>
-                </Button>
-              </Link>
-              <Link href="/dashboard">
-                <Button size="sm">Dashboard</Button>
-              </Link>
-              <Button variant="ghost" size="sm">
-                <LogOut className="h-4 w-4" />
-              </Button>
+              {user ? (
+                <>
+                  <Link href="/create-clone">
+                    <Button variant="ghost" className="hidden sm:inline-flex">
+                      Become a Creator
+                    </Button>
+                  </Link>
+                  <Link href="/profile">
+                    <Button variant="outline" size="sm">
+                      <User className="h-4 w-4 mr-2" />
+                      <span className="hidden sm:inline">Profile</span>
+                    </Button>
+                  </Link>
+                  <Link href="/dashboard">
+                    <Button size="sm">Dashboard</Button>
+                  </Link>
+                </>
+              ) : (
+                <>
+                  <Link href="/auth/login">
+                    <Button variant="ghost" size="sm">
+                      Sign In
+                    </Button>
+                  </Link>
+                  <Link href="/auth/signup">
+                    <Button size="sm">
+                      Get Started
+                    </Button>
+                  </Link>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -247,6 +314,9 @@ export default function CloneProfilePage() {
                   {expert.featured && (
                     <Badge className="bg-gradient-to-r from-yellow-400 to-orange-500 text-white">Featured Expert</Badge>
                   )}
+                  {!expert.is_published && (
+                    <Badge variant="secondary">Draft</Badge>
+                  )}
                 </div>
                 <p className="text-lg sm:text-xl text-slate-600 dark:text-slate-300 mb-4">{expert.specialty}</p>
                 <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 text-sm">
@@ -268,30 +338,45 @@ export default function CloneProfilePage() {
 
             {/* Action Buttons */}
             <div className="flex flex-col space-y-3 w-full lg:min-w-[280px]">
-              <Link href={`/chat/${expert.id}?demo=true`}>
-                <Button size="lg" variant="outline" className="w-full justify-center bg-transparent">
-                  <Play className="mr-2 h-4 w-4" />
-                  Try Free Demo (3 min)
-                </Button>
-              </Link>
-              <Link href={`/chat/${expert.id}`}>
-                <Button size="lg" className="w-full justify-center">
-                  <MessageCircle className="mr-2 h-4 w-4" />
-                  <span className="hidden sm:inline">Start Text Chat - </span>${expert.pricing.text.min}/session
-                </Button>
-              </Link>
-              <Link href={`/voice/${expert.id}`}>
-                <Button size="lg" variant="secondary" className="w-full justify-center">
-                  <Mic className="mr-2 h-4 w-4" />
-                  <span className="hidden sm:inline">Voice Session - </span>${expert.pricing.voice.min}/session
-                </Button>
-              </Link>
-              <Link href={`/video/${expert.id}`}>
-                <Button size="lg" variant="secondary" className="w-full justify-center">
-                  <Video className="mr-2 h-4 w-4" />
-                  <span className="hidden sm:inline">Video Call - </span>${expert.pricing.video.min}/session
-                </Button>
-              </Link>
+              {expert.is_published ? (
+                <>
+                  <Link href={`/chat/${expert.id}?demo=true`}>
+                    <Button size="lg" variant="outline" className="w-full justify-center bg-transparent">
+                      <Play className="mr-2 h-4 w-4" />
+                      Try Free Demo (3 min)
+                    </Button>
+                  </Link>
+                  <Link href={`/chat/${expert.id}`}>
+                    <Button size="lg" className="w-full justify-center">
+                      <MessageCircle className="mr-2 h-4 w-4" />
+                      <span className="hidden sm:inline">Start Text Chat - </span>${expert.pricing.text.min}/session
+                    </Button>
+                  </Link>
+                  <Link href={`/voice/${expert.id}`}>
+                    <Button size="lg" variant="secondary" className="w-full justify-center">
+                      <Mic className="mr-2 h-4 w-4" />
+                      <span className="hidden sm:inline">Voice Session - </span>${expert.pricing.voice.min}/session
+                    </Button>
+                  </Link>
+                  <Link href={`/video/${expert.id}`}>
+                    <Button size="lg" variant="secondary" className="w-full justify-center">
+                      <Video className="mr-2 h-4 w-4" />
+                      <span className="hidden sm:inline">Video Call - </span>${expert.pricing.video.min}/session
+                    </Button>
+                  </Link>
+                </>
+              ) : (
+                <div className="text-center p-4 bg-slate-100 dark:bg-slate-800 rounded-lg">
+                  <p className="text-slate-600 dark:text-slate-300 mb-2">This clone is not yet published</p>
+                  {user && user.id === expert.creator_id && (
+                    <Link href={`/dashboard/creator`}>
+                      <Button variant="outline" size="sm">
+                        Edit Clone
+                      </Button>
+                    </Link>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </motion.div>
@@ -318,7 +403,7 @@ export default function CloneProfilePage() {
               <TabsContent value="overview" className="mt-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle>About Dr. Sarah Chen</CardTitle>
+                    <CardTitle>About {expert.name}</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-6">
                     <p className="text-slate-600 dark:text-slate-300 leading-relaxed">{expert.bio}</p>
@@ -389,7 +474,7 @@ export default function CloneProfilePage() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-6">
-                    {reviews.map((review) => (
+                    {getExampleReviews(expert.name).map((review) => (
                       <div
                         key={review.id}
                         className="border-b border-slate-200 dark:border-slate-700 last:border-b-0 pb-6 last:pb-0"
@@ -537,8 +622,8 @@ export default function CloneProfilePage() {
                 <CardTitle>Similar Experts</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                {similarExperts.map((similarExpert) => {
-                  const similarTypeConfig = expertTypes[similarExpert.type as keyof typeof expertTypes]
+                {getSimilarExperts(expert.type).map((similarExpert) => {
+                  const similarTypeConfig = expertTypes[similarExpert.type as keyof typeof expertTypes] || expertTypes.coaching
                   return (
                     <Link key={similarExpert.id} href={`/clone/${similarExpert.id}`}>
                       <div className="flex items-center space-x-3 p-3 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer">

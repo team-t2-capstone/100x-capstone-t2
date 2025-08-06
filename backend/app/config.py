@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     SUPABASE_URL: Optional[str] = None
     SUPABASE_KEY: Optional[str] = None
     SUPABASE_SERVICE_KEY: Optional[str] = None
+    SUPABASE_JWT_SECRET: Optional[str] = None  # JWT secret for token verification
     
     # OpenAI settings
     OPENAI_API_KEY: Optional[str] = None
@@ -45,12 +46,15 @@ class Settings(BaseSettings):
     # Redis settings (for caching and background tasks)
     REDIS_URL: str = "redis://localhost:6379"
     
-    # CORS settings
-    CORS_ORIGINS: List[str] = [
-        "http://localhost:3000",  # Frontend development
-        "http://localhost:3001",  # Alternative frontend port
-        "https://cloneai.vercel.app",  # Production frontend
-    ]
+    # CORS settings - comma-separated string in .env, parsed to list
+    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:3001,https://cloneai.vercel.app"
+    
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """Parse CORS_ORIGINS string into list"""
+        if isinstance(self.CORS_ORIGINS, str):
+            return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+        return self.CORS_ORIGINS
     ALLOWED_HOSTS: List[str] = ["*"]
     
     # Rate limiting
@@ -92,7 +96,7 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # Validate required settings
-def validate_settings():
+def validate_settings(strict: bool = False):
     """Validate that required environment variables are set"""
     required_vars = [
         "SUPABASE_URL",
@@ -106,7 +110,15 @@ def validate_settings():
             missing_vars.append(var)
     
     if missing_vars:
-        raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+        if strict:
+            raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+        else:
+            # Just log warnings for development
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Missing environment variables (will use defaults): {', '.join(missing_vars)}")
+            return False
+    return True
 
 # Export settings
 __all__ = ["settings", "validate_settings"]

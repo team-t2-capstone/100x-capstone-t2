@@ -1,5 +1,7 @@
 "use client"
 
+import { RequireAuth } from '@/components/auth/protected-route';
+import { useAuth } from '@/contexts/auth-context';
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -209,7 +211,8 @@ const monthlyStats = {
   favoriteCategory: "Life & Coaching",
 }
 
-export default function DashboardPage() {
+function DashboardPageContent() {
+  const { user } = useAuth();
   const [selectedTab, setSelectedTab] = useState("overview")
   const [cloneSearchQuery, setCloneSearchQuery] = useState("")
   const [selectedCloneCategory, setSelectedCloneCategory] = useState("all")
@@ -272,7 +275,7 @@ export default function DashboardPage() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white mb-2">Welcome back, Alex!</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white mb-2">Welcome back, {user?.full_name || 'User'}!</h1>
           <p className="text-lg text-slate-600 dark:text-slate-300">Here's your learning and growth journey</p>
         </div>
 
@@ -884,4 +887,12 @@ export default function DashboardPage() {
       </div>
     </div>
   )
+}
+
+export default function DashboardPage() {
+  return (
+    <RequireAuth>
+      <DashboardPageContent />
+    </RequireAuth>
+  );
 }

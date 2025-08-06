@@ -1,6 +1,12 @@
 "use client"
 
+import { RequireCreator } from '@/components/auth/protected-route';
 import { useState } from "react"
+import { useRouter } from 'next/navigation'
+import { createClone, updateClone, type CloneCreateRequest } from '@/lib/clone-api'
+import { uploadDocument, createKnowledgeEntry, processUrl } from '@/lib/knowledge-api'
+import { useAuth } from '@/contexts/auth-context'
+import { toast } from '@/components/ui/use-toast'
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -85,8 +91,12 @@ const sampleQuestions = [
   "How do you handle setbacks or lack of progress?",
 ]
 
-export default function CloneWizardPage() {
+function CloneWizardContent() {
+  const router = useRouter()
+  const { user } = useAuth()
   const [currentStep, setCurrentStep] = useState(1)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [createdCloneId, setCreatedCloneId] = useState<string | null>(null)
   const [formData, setFormData] = useState({
     // Step 1: Basic Information
     name: "",
@@ -153,8 +163,10 @@ export default function CloneWizardPage() {
 
   const progress = (currentStep / steps.length) * 100
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (currentStep < steps.length) {
+      // Save progress before moving to next step
+      await saveProgress()
       setCurrentStep(currentStep + 1)
     }
   }
@@ -162,6 +174,137 @@ export default function CloneWizardPage() {
   const handlePrevious = () => {
     if (currentStep > 1) {
       setCurrentStep(currentStep - 1)
+    }
+  }
+
+  const saveProgress = async () => {
+    try {
+      setIsSubmitting(true)
+      
+      if (!createdCloneId) {
+        // Create initial clone
+        const cloneData: CloneCreateRequest = {
+          name: formData.name || 'Untitled Clone',
+          description: formData.bio || 'Clone description',
+          category: formData.expertise || 'coaching',
+          expertise_areas: formData.credentials,
+          base_price: formData.pricing.text.min || 25,
+          bio: formData.bio,
+          personality_traits: formData.personality,
+          communication_style: {
+            style: formData.communicationStyle,
+            response_length: formData.responseLength,
+          },
+          languages: formData.languages,
+        }
+
+        const clone = await createClone(cloneData)
+        setCreatedCloneId(clone.id)
+        
+        toast({
+          title: "Progress saved",
+          description: "Clone created and progress saved",
+        })
+      } else {
+        // Update existing clone
+        const updateData = {
+          name: formData.name,
+          description: formData.bio,
+          expertise_areas: formData.credentials,
+          base_price: formData.pricing.text.min,
+          bio: formData.bio,
+          personality_traits: formData.personality,
+          communication_style: {
+            style: formData.communicationStyle,
+            response_length: formData.responseLength,
+          },
+          languages: formData.languages,
+        }
+
+        await updateClone(createdCloneId, updateData)
+        
+        toast({
+          title: "Progress saved",
+          description: "Clone updated successfully",
+        })
+      }
+    } catch (error) {
+      console.error('Save error:', error)
+      toast({
+        title: "Save failed",
+        description: error instanceof Error ? error.message : "Failed to save progress",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const handleFinalSubmit = async () => {
+    try {
+      setIsSubmitting(true)
+      
+      if (!createdCloneId) {
+        await saveProgress()
+        if (!createdCloneId) return
+      }
+
+      // Process Q&A responses into knowledge entries
+      const qaPromises = Object.entries(formData.qaResponses)
+        .filter(([_, answer]) => answer && answer.trim())
+        .map(([question, answer]) =>
+          createKnowledgeEntry({
+            clone_id: createdCloneId!,
+            question,
+            answer,
+            category: 'qa_training',
+            confidence: 0.9,
+          })
+        )
+
+      await Promise.all(qaPromises)
+
+      // Process uploaded documents
+      if (formData.documents.length > 0) {
+        const docPromises = formData.documents.map(doc =>
+          uploadDocument(createdCloneId!, {
+            file: doc,
+            title: doc.name,
+            tags: ['training_material'],
+          })
+        )
+        
+        await Promise.all(docPromises)
+      }
+
+      // Process URLs
+      if (formData.links.length > 0) {
+        const urlPromises = formData.links.map(url =>
+          processUrl(createdCloneId!, url)
+        )
+        
+        await Promise.all(urlPromises)
+      }
+
+      toast({
+        title: "Clone created successfully!",
+        description: formData.status === 'published' ? 
+          "Your clone is now live and available to users" : 
+          "Your clone has been saved as a draft",
+      })
+
+      // Redirect to dashboard
+      router.push('/dashboard/creator')
+      
+    } catch (error) {
+      console.error('Submit error:', error)
+      toast({
+        title: "Submission failed",
+        description: error instanceof Error ? error.message : "Failed to create clone",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -467,7 +610,25 @@ export default function CloneWizardPage() {
                         Drag and drop your files here
                       </p>
                       <p className="text-slate-600 dark:text-slate-300 mb-4">PDF, DOC, TXT files up to 10MB each</p>
-                      <Button variant="outline" className="bg-transparent">
+                      <input
+                        type="file"
+                        multiple
+                        accept=".pdf,.doc,.docx,.txt,.md,.rtf"
+                        onChange={(e) => {
+                          const files = Array.from(e.target.files || [])
+                          setFormData({
+                            ...formData,
+                            documents: [...formData.documents, ...files]
+                          })
+                        }}
+                        className="hidden"
+                        id="file-upload"
+                      />
+                      <Button 
+                        variant="outline" 
+                        className="bg-transparent"
+                        onClick={() => document.getElementById('file-upload')?.click()}
+                      >
                         Choose Files
                       </Button>
                     </div>
@@ -484,7 +645,16 @@ export default function CloneWizardPage() {
                               <FileText className="h-4 w-4 text-slate-500" />
                               <span className="text-sm">{doc.name}</span>
                             </div>
-                            <Button variant="ghost" size="sm">
+                            <Button 
+                              variant="ghost" 
+                              size="sm"
+                              onClick={() => {
+                                setFormData({
+                                  ...formData,
+                                  documents: formData.documents.filter((_, i) => i !== index)
+                                })
+                              }}
+                            >
                               <X className="h-4 w-4" />
                             </Button>
                           </div>
@@ -1176,22 +1346,41 @@ export default function CloneWizardPage() {
           </Button>
 
           <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-4 w-full sm:w-auto">
-            <Link href="/dashboard/creator" className="w-full sm:w-auto">
-              <Button variant="ghost" className="w-full">
-                Save & Exit
-              </Button>
-            </Link>
+            <Button 
+              variant="ghost" 
+              className="w-full sm:w-auto"
+              onClick={() => router.push('/dashboard/creator')}
+              disabled={isSubmitting}
+            >
+              Save & Exit
+            </Button>
             {currentStep === steps.length ? (
-              <Link href="/dashboard/creator" className="w-full sm:w-auto">
-                <Button className="bg-green-600 hover:bg-green-700 w-full">
-                  <CheckCircle className="h-4 w-4 mr-2" />
-                  {formData.status === "published" ? "Launch Clone" : "Save Draft"}
-                </Button>
-              </Link>
+              <Button 
+                className="bg-green-600 hover:bg-green-700 w-full sm:w-auto"
+                onClick={handleFinalSubmit}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <>Saving...</>
+                ) : (
+                  <>
+                    <CheckCircle className="h-4 w-4 mr-2" />
+                    {formData.status === "published" ? "Launch Clone" : "Save Draft"}
+                  </>
+                )}
+              </Button>
             ) : (
-              <Button onClick={handleNext} className="w-full sm:w-auto">
-                Next
-                <ArrowRight className="h-4 w-4 ml-2" />
+              <Button 
+                onClick={handleNext} 
+                className="w-full sm:w-auto"
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? 'Saving...' : (
+                  <>
+                    Next
+                    <ArrowRight className="h-4 w-4 ml-2" />
+                  </>
+                )}
               </Button>
             )}
           </div>
@@ -1199,4 +1388,12 @@ export default function CloneWizardPage() {
       </div>
     </div>
   )
+}
+
+export default function CloneWizardPage() {
+  return (
+    <RequireCreator>
+      <CloneWizardContent />
+    </RequireCreator>
+  );
 }

@@ -15,6 +15,13 @@ from fastapi.responses import JSONResponse
 # Import configurations
 from app.config import settings, validate_settings
 
+# Import database and security
+from app.database import init_database, close_database, test_all_connections, db_manager
+from app.core.security import get_security_headers
+
+# Import API routers
+from app.api import auth_supabase as auth, clones, knowledge, users, discovery, rag, sessions, chat, memory, summarization, analytics, billing, ai_chat, chat_websocket
+
 # Configure structured logging
 structlog.configure(
     processors=[
@@ -43,13 +50,19 @@ async def lifespan(app: FastAPI):
     logger.info("Starting CloneAI API", version=settings.VERSION)
     
     try:
-        # Validate required environment variables
-        validate_settings()
-        logger.info("Configuration validation passed")
+        # Validate required environment variables (non-strict for development)
+        if validate_settings(strict=False):
+            logger.info("Configuration validation passed")
+        else:
+            logger.warning("Some configuration values missing - using defaults")
         
-        # Initialize database connections (will be implemented later)
-        # await init_database()
-        logger.info("Database connections ready")
+        # Initialize database connections
+        await init_database()
+        logger.info("Database connections initialized")
+        
+        # Test all database connections
+        connection_results = await test_all_connections()
+        logger.info("Database connection tests completed", results=connection_results)
         
         # Initialize Redis connection (will be implemented later)
         # await init_redis()
@@ -95,7 +108,7 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -106,6 +119,22 @@ app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=settings.ALLOWED_HOSTS
 )
+
+# Include API routers
+app.include_router(auth.router, prefix=settings.API_V1_STR)
+app.include_router(ai_chat.router, prefix=settings.API_V1_STR)  # AI chat endpoints
+app.include_router(chat_websocket.router, prefix=settings.API_V1_STR)  # WebSocket chat
+app.include_router(clones.router, prefix=settings.API_V1_STR)
+app.include_router(knowledge.router, prefix=settings.API_V1_STR)
+app.include_router(users.router, prefix=settings.API_V1_STR)
+app.include_router(discovery.router, prefix=settings.API_V1_STR)
+app.include_router(rag.router, prefix=settings.API_V1_STR)
+app.include_router(sessions.router, prefix=settings.API_V1_STR)
+app.include_router(chat.router, prefix=settings.API_V1_STR)
+app.include_router(memory.router, prefix=settings.API_V1_STR)
+app.include_router(summarization.router, prefix=settings.API_V1_STR)
+app.include_router(analytics.router, prefix=settings.API_V1_STR)
+app.include_router(billing.router, prefix=settings.API_V1_STR)
 
 # Health check endpoints
 @app.get("/health")
@@ -129,11 +158,47 @@ async def detailed_health_check() -> Dict[str, Any]:
         "services": {}
     }
     
-    # Check database connection (placeholder)
-    health_status["services"]["database"] = {
-        "status": "healthy",
-        "message": "Database connection ready"
-    }
+    # Check database connection and pool status
+    try:
+        db_health = await db_manager.health_check()
+        
+        # Get connection pool statistics
+        pool_stats = {}
+        if db_manager.engine and db_manager.engine.pool:
+            pool = db_manager.engine.pool
+            pool_stats = {
+                "pool_size": pool.size(),
+                "checked_in": pool.checkedin(),
+                "checked_out": pool.checkedout(),
+                "overflow": pool.overflow(),
+                "invalid": pool.invalid(),
+                "pool_usage_percent": round((pool.checkedout() / (pool.size() + pool.overflow())) * 100, 2) if (pool.size() + pool.overflow()) > 0 else 0
+            }
+        
+        health_status["services"]["database"] = {
+            "status": "healthy" if db_health else "unhealthy",
+            "message": "Database connection ready" if db_health else "Database connection failed",
+            "connection_pool": pool_stats
+        }
+    except Exception as e:
+        health_status["services"]["database"] = {
+            "status": "unhealthy",
+            "message": f"Database check failed: {str(e)}",
+            "connection_pool": {}
+        }
+    
+    # Check Supabase client
+    try:
+        supabase_client = db_manager.get_supabase()
+        health_status["services"]["supabase"] = {
+            "status": "healthy",
+            "message": "Supabase client ready"
+        }
+    except Exception as e:
+        health_status["services"]["supabase"] = {
+            "status": "unhealthy",
+            "message": f"Supabase client error: {str(e)}"
+        }
     
     # Check OpenAI API (placeholder)
     health_status["services"]["openai"] = {
@@ -146,6 +211,20 @@ async def detailed_health_check() -> Dict[str, Any]:
         "status": "healthy", 
         "message": "Redis connection ready"
     }
+    
+    # Storage buckets check (placeholder)
+    health_status["services"]["storage"] = {
+        "status": "healthy",
+        "message": "Storage buckets configured",
+        "buckets": ["avatars", "clone-avatars", "documents", "exports"]
+    }
+    
+    # Overall status determination
+    service_statuses = [service["status"] for service in health_status["services"].values()]
+    if "unhealthy" in service_statuses:
+        health_status["status"] = "degraded"
+    elif "configured" in service_statuses and all(status in ["healthy", "configured"] for status in service_statuses):
+        health_status["status"] = "healthy"
     
     return health_status
 
