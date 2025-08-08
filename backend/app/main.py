@@ -20,7 +20,15 @@ from app.database import init_database, close_database, test_all_connections, db
 from app.core.security import get_security_headers
 
 # Import API routers
-from app.api import auth_supabase as auth, clones, knowledge, users, discovery, rag, sessions, chat, memory, summarization, analytics, billing, ai_chat, chat_websocket
+from app.api import clones, knowledge, users, discovery, rag, sessions, chat, memory, summarization, analytics, billing, ai_chat, chat_websocket, webrtc, voice_video_calls
+
+# Import auth conditionally
+try:
+    from app.api import auth_supabase as auth
+    AUTH_AVAILABLE = True
+except ImportError:
+    AUTH_AVAILABLE = False
+    auth = None
 
 # Configure structured logging
 structlog.configure(
@@ -121,7 +129,8 @@ app.add_middleware(
 )
 
 # Include API routers
-app.include_router(auth.router, prefix=settings.API_V1_STR)
+if AUTH_AVAILABLE and auth:
+    app.include_router(auth.router, prefix=settings.API_V1_STR)
 app.include_router(ai_chat.router, prefix=settings.API_V1_STR)  # AI chat endpoints
 app.include_router(chat_websocket.router, prefix=settings.API_V1_STR)  # WebSocket chat
 app.include_router(clones.router, prefix=settings.API_V1_STR)
@@ -135,6 +144,8 @@ app.include_router(memory.router, prefix=settings.API_V1_STR)
 app.include_router(summarization.router, prefix=settings.API_V1_STR)
 app.include_router(analytics.router, prefix=settings.API_V1_STR)
 app.include_router(billing.router, prefix=settings.API_V1_STR)
+app.include_router(webrtc.router, prefix=settings.API_V1_STR)
+app.include_router(voice_video_calls.router, prefix=settings.API_V1_STR)
 
 # Health check endpoints
 @app.get("/health")

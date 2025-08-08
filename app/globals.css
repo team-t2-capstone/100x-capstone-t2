@@ -88,3 +88,41 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* WebRTC Video Styles */
+.mirror {
+  transform: scaleX(-1);
+}
+
+/* WebRTC Call Quality Indicators */
+.connection-excellent {
+  @apply text-green-500;
+}
+
+.connection-good {
+  @apply text-yellow-500;
+}
+
+.connection-fair {
+  @apply text-orange-500;
+}
+
+.connection-poor {
+  @apply text-red-500;
+}
+
+/* WebRTC Loading Animations */
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.8);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+.pulse-ring {
+  animation: pulse-ring 1.5s cubic-bezier(0.455, 0.03, 0.515, 0.955) infinite;
+}

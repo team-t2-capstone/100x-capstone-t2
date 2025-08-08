@@ -44,6 +44,11 @@ class MessageResponse(BaseSchema):
     success: bool = True
 
 
+class RefreshTokenRequest(BaseSchema):
+    """Refresh token request schema"""
+    refresh_token: str
+
+
 @router.post("/signup", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
 async def signup(
     user_data: UserSignup,
@@ -116,8 +121,7 @@ async def signup(
 @router.post("/login", response_model=AuthResponse)
 async def login(
     user_credentials: UserLogin,
-    supabase_client: Client = Depends(get_supabase),
-    db: AsyncSession = Depends(get_db_session)
+    supabase_client: Client = Depends(get_supabase)
 ) -> AuthResponse:
     """
     Authenticate user with Supabase Auth
@@ -130,55 +134,26 @@ async def login(
             supabase_client=supabase_client
         )
         
-        # Update last login in our database
-        user_id = auth_result["user"].id
-        await db.execute(
-            update(UserProfile)
-            .where(UserProfile.id == user_id)
-            .values(last_login=datetime.utcnow())
-        )
-        await db.commit()
-        
-        # Get user profile from our database
-        user_result = await db.execute(
-            select(UserProfile).where(UserProfile.id == user_id)
-        )
-        user_profile = user_result.scalar_one_or_none()
-        
-        if not user_profile:
-            # Create user profile if it doesn't exist (edge case)
-            user_profile = UserProfile(
-                id=user_id,
-                email=auth_result["user"].email,
-                full_name=auth_result["user"].user_metadata.get("full_name", ""),
-                role=auth_result["user"].user_metadata.get("role", "user"),
-                hashed_password="",  # Managed by Supabase
-                is_active=True,
-                is_verified=auth_result["user"].email_confirmed_at is not None
-            )
-            db.add(user_profile)
-            await db.commit()
-            await db.refresh(user_profile)
-        
-        # Prepare response
+        # Prepare response using Supabase user data
+        user_data = auth_result["user"]
         response_data = {
             "access_token": auth_result["access_token"],
             "refresh_token": auth_result["refresh_token"],
             "token_type": "Bearer",
             "expires_in": auth_result["expires_in"],
             "user": {
-                "id": user_profile.id,
-                "email": user_profile.email,
-                "full_name": user_profile.full_name,
-                "role": user_profile.role,
-                "email_confirmed": auth_result["user"].email_confirmed_at is not None,
-                "subscription_tier": user_profile.subscription_tier,
-                "credits_remaining": user_profile.credits_remaining,
-                "last_login": user_profile.last_login.isoformat() if user_profile.last_login else None
+                "id": user_data.id,
+                "email": user_data.email,
+                "full_name": user_data.user_metadata.get("full_name", ""),
+                "role": user_data.user_metadata.get("role", "user"),
+                "email_confirmed": user_data.email_confirmed_at is not None,
+                "subscription_tier": "free",  # Default value
+                "credits_remaining": 100,     # Default value
+                "last_login": datetime.utcnow().isoformat()
             }
         }
         
-        logger.info("User logged in successfully", user_id=user_profile.id, email=user_profile.email)
+        logger.info("User logged in successfully", user_id=user_data.id, email=user_data.email)
         return AuthResponse(**response_data)
         
     except SupabaseAuthError as e:
@@ -197,7 +172,7 @@ async def login(
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(
-    refresh_token: str,
+    request: RefreshTokenRequest,
     supabase_client: Client = Depends(get_supabase)
 ) -> TokenResponse:
     """
@@ -205,7 +180,7 @@ async def refresh_token(
     """
     try:
         token_result = await supabase_auth.refresh_token(
-            refresh_token=refresh_token,
+            refresh_token=request.refresh_token,
             supabase_client=supabase_client
         )
         
@@ -262,30 +237,30 @@ async def logout(
 @router.get("/me", response_model=UserProfileSchema)
 async def get_current_user(
     current_user_id: str = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db_session)
+    supabase_client: Client = Depends(get_supabase)
 ) -> UserProfileSchema:
     """
-    Get current user profile information
+    Get current user profile information from Supabase
     """
     try:
-        # Get user from database
-        user_result = await db.execute(
-            select(UserProfile).where(UserProfile.id == current_user_id)
-        )
-        user = user_result.scalar_one_or_none()
+        # Get user from Supabase Auth
+        response = supabase_client.auth.get_user()
         
-        if not user:
+        if not response.user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
             )
         
+        user = response.user
+        user_metadata = user.user_metadata or {}
+        
         return UserProfileSchema(
             id=str(user.id),
             email=user.email,
-            full_name=user.full_name,
-            avatar_url=user.avatar_url,
-            role=user.role,
+            full_name=user_metadata.get("full_name", ""),
+            avatar_url=user_metadata.get("avatar_url"),
+            role=user_metadata.get("role", "user"),
             created_at=user.created_at,
             updated_at=user.updated_at
         )
@@ -337,8 +312,7 @@ async def request_password_reset(
 async def verify_email(
     token: str,
     email: str,
-    supabase_client: Client = Depends(get_supabase),
-    db: AsyncSession = Depends(get_db_session)
+    supabase_client: Client = Depends(get_supabase)
 ) -> MessageResponse:
     """
     Verify email address with Supabase token
@@ -351,14 +325,7 @@ async def verify_email(
         )
         
         if success:
-            # Update user verification status in our database
-            await db.execute(
-                update(UserProfile)
-                .where(UserProfile.email == email)
-                .values(is_verified=True)
-            )
-            await db.commit()
-            
+            # Email verification is handled entirely by Supabase
             logger.info("Email verified successfully", email=email)
             return MessageResponse(message="Email verified successfully")
         else:

@@ -13,8 +13,7 @@ from sqlalchemy import select, and_, or_, func, desc
 from sqlalchemy.orm import selectinload
 import structlog
 
-from app.core.security import get_current_user_id, require_creator
-from app.database import get_db_session
+from app.database import get_db_session, get_supabase
 from app.models.database import Clone, UserProfile, Session
 from app.models.schemas import (
     CloneCreate, CloneUpdate, CloneResponse, CloneListResponse,
@@ -29,191 +28,148 @@ router = APIRouter(prefix="/clones", tags=["Clone Management"])
 async def create_clone(
     clone_data: CloneCreate,
     current_user_id: str = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db_session)
+    supabase_client = Depends(get_supabase)
 ) -> CloneResponse:
     """
-    Create a new AI expert clone
+    Create a new AI expert clone using Supabase
     """
     try:
-        # Check if user exists and has creator role
-        result = await db.execute(
-            select(UserProfile).where(UserProfile.id == current_user_id)
-        )
-        user = result.scalar_one_or_none()
+        from uuid import uuid4
+        from datetime import datetime
         
-        if not user:
+        # Create clone data for Supabase
+        clone_id = str(uuid4())
+        clone_data_dict = {
+            "id": clone_id,
+            "creator_id": current_user_id,
+            "name": clone_data.name,
+            "description": clone_data.description,
+            "category": clone_data.category,
+            "expertise_areas": clone_data.expertise_areas,
+            "base_price": float(clone_data.base_price),
+            "bio": clone_data.bio,
+            "personality_traits": clone_data.personality_traits,
+            "communication_style": clone_data.communication_style,
+            "languages": clone_data.languages,
+            "is_published": False,
+            "is_active": True,
+            "average_rating": 0.0,
+            "total_sessions": 0,
+            "total_earnings": 0.0,
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        
+        # Insert into Supabase clones table
+        response = supabase_client.table("clones").insert(clone_data_dict).execute()
+        
+        if not response.data:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create clone in database"
             )
         
-        if user.role not in ["creator", "admin"]:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only creators can create clones"
-            )
+        created_clone = response.data[0]
         
-        # Create new clone
-        new_clone = Clone(
-            creator_id=UUID(current_user_id),
-            name=clone_data.name,
-            description=clone_data.description,
-            category=clone_data.category,
-            expertise_areas=clone_data.expertise_areas,
-            base_price=clone_data.base_price,
-            bio=clone_data.bio,
-            personality_traits=clone_data.personality_traits,
-            communication_style=clone_data.communication_style,
-            languages=clone_data.languages,
-            is_published=False,  # New clones start as drafts
-            is_active=True
-        )
-        
-        db.add(new_clone)
-        await db.commit()
-        await db.refresh(new_clone)
-        
-        logger.info("Clone created successfully", 
-                   clone_id=str(new_clone.id), 
+        logger.info("Clone created successfully in Supabase", 
+                   clone_id=clone_id, 
                    creator_id=current_user_id)
         
-        return CloneResponse.from_orm(new_clone)
+        # Return response using created data
+        return CloneResponse(
+            id=created_clone["id"],
+            creator_id=created_clone["creator_id"],
+            name=created_clone["name"],
+            description=created_clone["description"],
+            category=created_clone["category"],
+            expertise_areas=created_clone["expertise_areas"],
+            base_price=created_clone["base_price"],
+            bio=created_clone["bio"],
+            personality_traits=created_clone["personality_traits"],
+            communication_style=created_clone["communication_style"],
+            languages=created_clone["languages"],
+            is_published=created_clone["is_published"],
+            is_active=created_clone["is_active"],
+            average_rating=created_clone["average_rating"],
+            total_sessions=created_clone["total_sessions"],
+            total_earnings=created_clone["total_earnings"],
+            created_at=datetime.fromisoformat(created_clone["created_at"].replace('Z', '+00:00')),
+            updated_at=datetime.fromisoformat(created_clone["updated_at"].replace('Z', '+00:00')),
+            published_at=datetime.fromisoformat(created_clone["published_at"].replace('Z', '+00:00')) if created_clone.get("published_at") else None
+        )
         
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error("Clone creation failed", error=str(e), creator_id=current_user_id)
-        await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create clone"
         )
 
 
-@router.get("/", response_model=CloneListResponse)
-async def list_clones(
-    page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100),
-    category: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-    price_min: Optional[float] = Query(None, ge=0),
-    price_max: Optional[float] = Query(None, ge=0),
-    rating_min: Optional[float] = Query(None, ge=0, le=5),
-    sort: str = Query("rating", regex="^(rating|price|popularity|created_at)$"),
-    current_user_id: Optional[str] = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db_session)
-) -> CloneListResponse:
-    """
-    List and search published clones with filtering and pagination
-    """
-    try:
-        # Build base query for published and active clones
-        query = select(Clone).where(
-            and_(Clone.is_published == True, Clone.is_active == True)
-        )
-        
-        # Apply filters
-        if category:
-            query = query.where(Clone.category == category)
-        
-        if search:
-            query = query.where(
-                or_(
-                    Clone.name.ilike(f"%{search}%"),
-                    Clone.description.ilike(f"%{search}%"),
-                    Clone.bio.ilike(f"%{search}%")
-                )
-            )
-        
-        if price_min is not None:
-            query = query.where(Clone.base_price >= price_min)
-        
-        if price_max is not None:
-            query = query.where(Clone.base_price <= price_max)
-        
-        if rating_min is not None:
-            query = query.where(Clone.average_rating >= rating_min)
-        
-        # Apply sorting
-        if sort == "rating":
-            query = query.order_by(desc(Clone.average_rating), desc(Clone.total_sessions))
-        elif sort == "price":
-            query = query.order_by(Clone.base_price)
-        elif sort == "popularity":
-            query = query.order_by(desc(Clone.total_sessions))
-        elif sort == "created_at":
-            query = query.order_by(desc(Clone.created_at))
-        
-        # Get total count
-        count_query = select(func.count()).select_from(query.subquery())
-        total_result = await db.execute(count_query)
-        total = total_result.scalar()
-        
-        # Apply pagination
-        offset = (page - 1) * limit
-        query = query.offset(offset).limit(limit)
-        
-        # Execute query
-        result = await db.execute(query)
-        clones = result.scalars().all()
-        
-        # Calculate pagination info
-        pages = (total + limit - 1) // limit
-        
-        return CloneListResponse(
-            clones=[CloneResponse.from_orm(clone) for clone in clones],
-            total=total,
-            page=page,
-            limit=limit,
-            pages=pages
-        )
-        
-    except Exception as e:
-        logger.error("Failed to list clones", error=str(e))
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve clones"
-        )
-
-
-@router.get("/my", response_model=CloneListResponse)
+@router.get("/my-clones", response_model=CloneListResponse)
 async def list_my_clones(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     include_drafts: bool = Query(True),
     current_user_id: str = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db_session)
+    supabase_client = Depends(get_supabase)
 ) -> CloneListResponse:
     """
-    List current user's clones (including drafts)
+    List current user's clones (including drafts) from Supabase
     """
     try:
-        # Build query for user's clones
-        query = select(Clone).where(Clone.creator_id == current_user_id)
+        from datetime import datetime
+        
+        # Build Supabase query for user's clones
+        query = supabase_client.table("clones").select("*").eq("creator_id", current_user_id)
         
         if not include_drafts:
-            query = query.where(Clone.is_published == True)
-        
-        query = query.order_by(desc(Clone.created_at))
-        
-        # Get total count
-        count_query = select(func.count()).select_from(query.subquery())
-        total_result = await db.execute(count_query)
-        total = total_result.scalar()
-        
-        # Apply pagination
-        offset = (page - 1) * limit
-        query = query.offset(offset).limit(limit)
+            query = query.eq("is_published", True)
         
         # Execute query
-        result = await db.execute(query)
-        clones = result.scalars().all()
+        response = query.execute()
+        
+        clones_data = response.data if response.data else []
+        
+        # Apply pagination
+        total = len(clones_data)
+        offset = (page - 1) * limit
+        paginated_clones = clones_data[offset:offset + limit]
+        
+        # Convert to CloneResponse objects
+        clones = []
+        for clone_data in paginated_clones:
+            clones.append(CloneResponse(
+                id=clone_data["id"],
+                creator_id=clone_data["creator_id"],
+                name=clone_data["name"],
+                description=clone_data["description"],
+                category=clone_data["category"],
+                expertise_areas=clone_data["expertise_areas"],
+                base_price=clone_data["base_price"],
+                bio=clone_data.get("bio", ""),
+                personality_traits=clone_data.get("personality_traits", []),
+                communication_style=clone_data.get("communication_style", ""),
+                languages=clone_data.get("languages", []),
+                is_published=clone_data["is_published"],
+                is_active=clone_data["is_active"],
+                average_rating=clone_data.get("average_rating", 0.0),
+                total_sessions=clone_data.get("total_sessions", 0),
+                total_earnings=clone_data.get("total_earnings", 0.0),
+                created_at=datetime.fromisoformat(clone_data["created_at"].replace('Z', '+00:00')),
+                updated_at=datetime.fromisoformat(clone_data["updated_at"].replace('Z', '+00:00')),
+                published_at=datetime.fromisoformat(clone_data["published_at"].replace('Z', '+00:00')) if clone_data.get("published_at") else None
+            ))
         
         # Calculate pagination info
         pages = (total + limit - 1) // limit
         
+        logger.info("Listed user clones from Supabase", 
+                   user_id=current_user_id, 
+                   total_clones=total)
+        
         return CloneListResponse(
-            clones=[CloneResponse.from_orm(clone) for clone in clones],
+            clones=clones,
             total=total,
             page=page,
             limit=limit,
@@ -221,7 +177,7 @@ async def list_my_clones(
         )
         
     except Exception as e:
-        logger.error("Failed to list user clones", error=str(e), user_id=current_user_id)
+        logger.error("Failed to list user clones from Supabase", error=str(e), user_id=current_user_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve your clones"

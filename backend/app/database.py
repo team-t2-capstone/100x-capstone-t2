@@ -9,8 +9,16 @@ from contextlib import asynccontextmanager
 import asyncpg
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import declarative_base
-from supabase import create_client, Client
 import structlog
+
+# Optional Supabase import
+try:
+    from supabase import create_client, Client
+    SUPABASE_AVAILABLE = True
+except ImportError:
+    SUPABASE_AVAILABLE = False
+    Client = None
+    create_client = None
 
 from app.config import settings
 
@@ -63,23 +71,20 @@ class DatabaseManager:
                 logger.info("SQLAlchemy engine initialized")
             
             # Initialize Supabase client for auth and storage
-            if settings.SUPABASE_URL and settings.SUPABASE_KEY:
+            if SUPABASE_AVAILABLE and settings.SUPABASE_URL and settings.SUPABASE_KEY:
                 try:
-                    # Create client without proxy configuration to avoid version conflicts
+                    # Create client with minimal configuration for compatibility
                     self.supabase_client = create_client(
                         settings.SUPABASE_URL,
-                        settings.SUPABASE_KEY,
-                        options={
-                            "auth": {"auto_refresh_token": True},
-                            "db": {"schema": "public"},
-                            "global": {"headers": {}}
-                        }
+                        settings.SUPABASE_KEY
                     )
                     logger.info("Supabase client initialized")
                 except Exception as e:
                     logger.error("Failed to initialize Supabase client", error=str(e))
                     # Continue without Supabase client for now
                     self.supabase_client = None
+            else:
+                logger.info("Supabase not available or not configured, skipping initialization")
             
             # Initialize raw asyncpg connection pool for vector operations (optional)
             if settings.DATABASE_URL:

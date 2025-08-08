@@ -1,6 +1,10 @@
 "use client"
 
 import { useState } from "react"
+import { useAuth } from '@/contexts/auth-context'
+import { useUserProfile } from '@/hooks/use-dashboard'
+import { useAdvancedBilling } from '@/hooks/use-billing'
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -11,22 +15,62 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Bell, Shield, CreditCard, LogOut, Camera, Save, Edit, Trash2 } from "lucide-react"
+import { Bell, Shield, CreditCard, Camera, Save, Edit, Trash2, Loader2, AlertCircle } from "lucide-react"
 import Link from "next/link"
 
 export default function ProfilePage() {
+  const { user } = useAuth()
   const [isEditing, setIsEditing] = useState(false)
+  
+  const {
+    profile,
+    loading,
+    error,
+    updating,
+    updateProfile,
+    updatePreferences,
+    refresh
+  } = useUserProfile(user?.id || '')
+  
+  const {
+    billingData,
+    loading: billingLoading,
+    error: billingError,
+    addPaymentMethod,
+    removePaymentMethod,
+    setPrimaryPaymentMethod,
+    downloadInvoice
+  } = useAdvancedBilling(user?.id || '')
+  
+  // Local state for form data
   const [profileData, setProfileData] = useState({
-    firstName: "Alex",
-    lastName: "Johnson",
-    email: "alex.johnson@example.com",
-    phone: "+1 (555) 123-4567",
-    location: "San Francisco, CA",
-    bio: "Passionate about personal growth and learning from AI experts. Always looking to improve myself and help others on their journey.",
-    dateOfBirth: "1990-05-15",
+    firstName: "",
+    lastName: "",
+    email: "",
+    phone: "",
+    location: "",
+    bio: "",
+    dateOfBirth: "",
     timezone: "America/Los_Angeles",
     avatar: "/placeholder.svg?height=120&width=120",
   })
+  
+  // Update local state when profile data loads
+  useState(() => {
+    if (profile && !isEditing) {
+      setProfileData({
+        firstName: profile.firstName || "",
+        lastName: profile.lastName || "",
+        email: profile.email || "",
+        phone: profile.phone || "",
+        location: profile.location || "",
+        bio: profile.bio || "",
+        dateOfBirth: profile.dateOfBirth || "",
+        timezone: profile.timezone || "America/Los_Angeles",
+        avatar: profile.avatar || "/placeholder.svg?height=120&width=120",
+      })
+    }
+  }, [profile, isEditing])
 
   const [preferences, setPreferences] = useState({
     emailNotifications: true,
@@ -38,6 +82,56 @@ export default function ProfilePage() {
     language: "en",
     currency: "USD",
   })
+  
+  // Update preferences when profile loads
+  useState(() => {
+    if (profile?.preferences) {
+      setPreferences({
+        emailNotifications: profile.preferences.emailNotifications ?? true,
+        pushNotifications: profile.preferences.pushNotifications ?? true,
+        sessionReminders: profile.preferences.sessionReminders ?? true,
+        marketingEmails: profile.preferences.marketingEmails ?? false,
+        weeklyDigest: profile.preferences.weeklyDigest ?? true,
+        darkMode: profile.preferences.darkMode ?? false,
+        language: profile.preferences.language ?? "en",
+        currency: profile.preferences.currency ?? "USD",
+      })
+    }
+  }, [profile?.preferences])
+  
+  const handleUpdatePreferences = async (newPreferences: any) => {
+    setPreferences(newPreferences)
+    await updatePreferences(newPreferences)
+  }
+  
+  // Loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center">
+        <div className="flex items-center space-x-2">
+          <Loader2 className="h-6 w-6 animate-spin" />
+          <span>Loading profile...</span>
+        </div>
+      </div>
+    )
+  }
+  
+  // Error state
+  if (error) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-8">
+        <Alert variant="destructive" className="max-w-md mx-auto">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            {error}
+            <Button variant="outline" size="sm" className="mt-2 w-full" onClick={refresh}>
+              Try Again
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    )
+  }
 
   const [securitySettings, setSecuritySettings] = useState({
     twoFactorAuth: false,
@@ -45,9 +139,11 @@ export default function ProfilePage() {
     loginAlerts: true,
   })
 
-  const handleSaveProfile = () => {
-    // Save profile logic here
-    setIsEditing(false)
+  const handleSaveProfile = async () => {
+    const success = await updateProfile(profileData)
+    if (success) {
+      setIsEditing(false)
+    }
   }
 
   const handleDeleteAccount = () => {
@@ -59,45 +155,6 @@ export default function ProfilePage() {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
-      {/* Navigation */}
-      <nav className="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-4 sm:space-x-8">
-              <Link
-                href="/"
-                className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-slate-900 to-slate-600 dark:from-white dark:to-slate-300 bg-clip-text text-transparent"
-              >
-                CloneAI
-              </Link>
-              <div className="hidden md:flex space-x-6">
-                <Link
-                  href="/discover"
-                  className="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors"
-                >
-                  Discover
-                </Link>
-                <Link
-                  href="/dashboard"
-                  className="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors"
-                >
-                  Dashboard
-                </Link>
-              </div>
-            </div>
-            <div className="flex items-center space-x-2 sm:space-x-4">
-              <Link href="/dashboard">
-                <Button variant="outline" size="sm">
-                  Dashboard
-                </Button>
-              </Link>
-              <Button variant="ghost" size="sm">
-                <LogOut className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        </div>
-      </nav>
 
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
@@ -115,6 +172,13 @@ export default function ProfilePage() {
           </TabsList>
 
           <TabsContent value="profile" className="space-y-6">
+            {error && (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+            
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center justify-between">
@@ -255,9 +319,22 @@ export default function ProfilePage() {
 
                 {isEditing && (
                   <div className="flex flex-col sm:flex-row gap-4 pt-4">
-                    <Button onClick={handleSaveProfile} className="flex-1 sm:flex-none">
-                      <Save className="h-4 w-4 mr-2" />
-                      Save Changes
+                    <Button 
+                      onClick={handleSaveProfile} 
+                      className="flex-1 sm:flex-none"
+                      disabled={updating}
+                    >
+                      {updating ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <Save className="h-4 w-4 mr-2" />
+                          Save Changes
+                        </>
+                      )}
                     </Button>
                     <Button
                       variant="outline"
@@ -290,7 +367,7 @@ export default function ProfilePage() {
                   </div>
                   <Switch
                     checked={preferences.emailNotifications}
-                    onCheckedChange={(checked) => setPreferences({ ...preferences, emailNotifications: checked })}
+                    onCheckedChange={(checked) => handleUpdatePreferences({ ...preferences, emailNotifications: checked })}
                   />
                 </div>
 
@@ -303,7 +380,7 @@ export default function ProfilePage() {
                   </div>
                   <Switch
                     checked={preferences.pushNotifications}
-                    onCheckedChange={(checked) => setPreferences({ ...preferences, pushNotifications: checked })}
+                    onCheckedChange={(checked) => handleUpdatePreferences({ ...preferences, pushNotifications: checked })}
                   />
                 </div>
 
@@ -314,7 +391,7 @@ export default function ProfilePage() {
                   </div>
                   <Switch
                     checked={preferences.sessionReminders}
-                    onCheckedChange={(checked) => setPreferences({ ...preferences, sessionReminders: checked })}
+                    onCheckedChange={(checked) => handleUpdatePreferences({ ...preferences, sessionReminders: checked })}
                   />
                 </div>
 
@@ -358,7 +435,7 @@ export default function ProfilePage() {
                   </div>
                   <Switch
                     checked={preferences.darkMode}
-                    onCheckedChange={(checked) => setPreferences({ ...preferences, darkMode: checked })}
+                    onCheckedChange={(checked) => handleUpdatePreferences({ ...preferences, darkMode: checked })}
                   />
                 </div>
 
@@ -367,7 +444,7 @@ export default function ProfilePage() {
                     <Label>Language</Label>
                     <Select
                       value={preferences.language}
-                      onValueChange={(value) => setPreferences({ ...preferences, language: value })}
+                      onValueChange={(value) => handleUpdatePreferences({ ...preferences, language: value })}
                     >
                       <SelectTrigger>
                         <SelectValue />
@@ -387,7 +464,7 @@ export default function ProfilePage() {
                     <Label>Currency</Label>
                     <Select
                       value={preferences.currency}
-                      onValueChange={(value) => setPreferences({ ...preferences, currency: value })}
+                      onValueChange={(value) => handleUpdatePreferences({ ...preferences, currency: value })}
                     >
                       <SelectTrigger>
                         <SelectValue />
@@ -502,17 +579,35 @@ export default function ProfilePage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="flex items-center space-x-3 p-4 border border-slate-200 dark:border-slate-700 rounded-lg">
-                  <CreditCard className="h-8 w-8 text-slate-400" />
-                  <div className="flex-1">
-                    <p className="font-medium">•••• •••• •••• 4242</p>
-                    <p className="text-sm text-slate-500">Expires 12/25</p>
+                {billingLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin mr-2" />
+                    <span>Loading payment methods...</span>
                   </div>
-                  <Badge>Primary</Badge>
-                  <Button variant="ghost" size="sm">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </div>
+                ) : !billingData?.paymentMethods.length ? (
+                  <div className="text-center py-8 text-slate-500">
+                    <CreditCard className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p>No payment methods added</p>
+                  </div>
+                ) : (
+                  billingData.paymentMethods.map((pm) => (
+                    <div key={pm.id} className="flex items-center space-x-3 p-4 border border-slate-200 dark:border-slate-700 rounded-lg">
+                      <CreditCard className="h-8 w-8 text-slate-400" />
+                      <div className="flex-1">
+                        <p className="font-medium">
+                          {pm.brand?.toUpperCase()} •••• {pm.last4}
+                        </p>
+                        <p className="text-sm text-slate-500">
+                          Expires {pm.expiryMonth?.toString().padStart(2, '0')}/{pm.expiryYear?.toString().slice(-2)}
+                        </p>
+                      </div>
+                      {pm.isPrimary && <Badge>Primary</Badge>}
+                      <Button variant="ghost" size="sm">
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))
+                )}
                 <Button variant="outline" className="w-full bg-transparent">
                   Add Payment Method
                 </Button>
@@ -524,44 +619,55 @@ export default function ProfilePage() {
                 <CardTitle>Billing History</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 border border-slate-200 dark:border-slate-700 rounded-lg space-y-2 sm:space-y-0">
-                    <div>
-                      <p className="font-medium">December 2024</p>
-                      <p className="text-sm text-slate-500">Sessions and subscriptions</p>
-                    </div>
-                    <div className="text-left sm:text-right">
-                      <p className="font-medium">$487.50</p>
-                      <Button variant="ghost" size="sm" className="p-0 h-auto">
-                        Download
-                      </Button>
-                    </div>
+                {billingLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin mr-2" />
+                    <span>Loading billing history...</span>
                   </div>
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 border border-slate-200 dark:border-slate-700 rounded-lg space-y-2 sm:space-y-0">
-                    <div>
-                      <p className="font-medium">November 2024</p>
-                      <p className="text-sm text-slate-500">Sessions and subscriptions</p>
-                    </div>
-                    <div className="text-left sm:text-right">
-                      <p className="font-medium">$325.00</p>
-                      <Button variant="ghost" size="sm" className="p-0 h-auto">
-                        Download
-                      </Button>
-                    </div>
+                ) : billingError ? (
+                  <Alert variant="destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>{billingError}</AlertDescription>
+                  </Alert>
+                ) : !billingData?.recentTransactions.length ? (
+                  <div className="text-center py-8 text-slate-500">
+                    <CreditCard className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p>No billing history yet</p>
                   </div>
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 border border-slate-200 dark:border-slate-700 rounded-lg space-y-2 sm:space-y-0">
-                    <div>
-                      <p className="font-medium">October 2024</p>
-                      <p className="text-sm text-slate-500">Sessions and subscriptions</p>
-                    </div>
-                    <div className="text-left sm:text-right">
-                      <p className="font-medium">$412.75</p>
-                      <Button variant="ghost" size="sm" className="p-0 h-auto">
-                        Download
-                      </Button>
-                    </div>
+                ) : (
+                  <div className="space-y-4">
+                    {billingData.recentTransactions.map((transaction) => (
+                      <div key={transaction.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 border border-slate-200 dark:border-slate-700 rounded-lg space-y-2 sm:space-y-0">
+                        <div>
+                          <p className="font-medium">{new Date(transaction.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long' })}</p>
+                          <p className="text-sm text-slate-500">{transaction.description}</p>
+                          <p className="text-xs text-slate-400">{transaction.paymentMethod}</p>
+                        </div>
+                        <div className="text-left sm:text-right">
+                          <p className="font-medium">${transaction.amount.toFixed(2)}</p>
+                          <div className="flex items-center space-x-2">
+                            <Badge 
+                              variant={transaction.status === 'completed' ? 'default' : transaction.status === 'failed' ? 'destructive' : 'secondary'}
+                              className="text-xs"
+                            >
+                              {transaction.status}
+                            </Badge>
+                            {transaction.invoiceUrl && (
+                              <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                className="p-0 h-auto"
+                                onClick={() => downloadInvoice(transaction.id)}
+                              >
+                                Download
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                </div>
+                )}
               </CardContent>
             </Card>
 
@@ -570,26 +676,57 @@ export default function ProfilePage() {
                 <CardTitle>Subscription</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <h4 className="font-medium text-slate-900 dark:text-white">Premium Plan</h4>
-                      <p className="text-sm text-slate-600 dark:text-slate-300">
-                        Unlimited sessions with featured experts
-                      </p>
-                    </div>
-                    <div className="text-left sm:text-right">
-                      <p className="text-2xl font-bold text-slate-900 dark:text-white">$29.99</p>
-                      <p className="text-sm text-slate-500">per month</p>
-                    </div>
+                {billingLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin mr-2" />
+                    <span>Loading subscription...</span>
                   </div>
-                  <div className="flex flex-col sm:flex-row gap-4">
-                    <Button variant="outline" className="bg-transparent">
-                      Change Plan
+                ) : !billingData?.subscription ? (
+                  <div className="text-center py-8 text-slate-500">
+                    <CreditCard className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p>No active subscription</p>
+                    <Button className="mt-4">
+                      Subscribe to Premium
                     </Button>
-                    <Button variant="ghost">Cancel Subscription</Button>
                   </div>
-                </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <h4 className="font-medium text-slate-900 dark:text-white">{billingData.subscription.plan}</h4>
+                          <Badge 
+                            variant={billingData.subscription.status === 'active' ? 'default' : 'secondary'}
+                          >
+                            {billingData.subscription.status}
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-slate-600 dark:text-slate-300">
+                          Unlimited sessions with featured experts
+                        </p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          Next billing: {new Date(billingData.subscription.currentPeriodEnd).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <div className="text-left sm:text-right">
+                        <p className="text-2xl font-bold text-slate-900 dark:text-white">
+                          ${billingData.subscription.amount.toFixed(2)}
+                        </p>
+                        <p className="text-sm text-slate-500">
+                          per {billingData.subscription.interval}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-4">
+                      <Button variant="outline" className="bg-transparent">
+                        Change Plan
+                      </Button>
+                      <Button variant="ghost">
+                        {billingData.subscription.cancelAtPeriodEnd ? 'Reactivate' : 'Cancel'} Subscription
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

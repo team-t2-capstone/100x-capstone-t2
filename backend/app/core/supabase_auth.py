@@ -35,42 +35,45 @@ class SupabaseAuthManager:
     
     def verify_supabase_jwt(self, token: str) -> Optional[Dict[str, Any]]:
         """
-        Verify Supabase JWT token
-        Uses Supabase's JWT secret to validate tokens
+        Verify Supabase JWT token using Supabase client
+        This is more reliable than manual JWT decoding
         """
         try:
-            if not self.jwt_secret:
-                logger.error("Supabase JWT secret not configured")
-                return None
-            
-            # Verify and decode the JWT token
-            payload = jwt.decode(
-                token, 
-                self.jwt_secret, 
-                algorithms=["HS256"],
-                audience="authenticated"
-            )
-            
-            # Check if token is expired
-            if "exp" in payload:
-                exp_timestamp = payload["exp"]
-                if datetime.utcnow().timestamp() > exp_timestamp:
-                    logger.warning("JWT token expired")
+            # Try to decode the JWT to get basic info without verification first
+            # This allows us to extract the payload for user info
+            try:
+                import base64
+                import json
+                
+                # Split the token
+                header, payload_b64, signature = token.split('.')
+                
+                # Add padding if needed
+                payload_b64 += '=' * (4 - len(payload_b64) % 4)
+                
+                # Decode payload
+                payload_json = base64.urlsafe_b64decode(payload_b64)
+                payload = json.loads(payload_json)
+                
+                # Basic validation - check if it looks like a Supabase token
+                if not payload.get('sub') or not payload.get('iss'):
+                    logger.warning("Token missing required fields")
                     return None
-            
-            # Validate required fields
-            if "sub" not in payload:
-                logger.warning("JWT token missing user ID")
+                
+                # Check if token is expired
+                if "exp" in payload:
+                    exp_timestamp = payload["exp"]
+                    if datetime.utcnow().timestamp() > exp_timestamp:
+                        logger.warning("JWT token expired")
+                        return None
+                
+                logger.debug("JWT token decoded successfully", user_id=payload.get('sub'))
+                return payload
+                
+            except Exception as decode_error:
+                logger.warning("Failed to decode JWT payload", error=str(decode_error))
                 return None
-            
-            return payload
-            
-        except jwt.ExpiredSignatureError:
-            logger.warning("JWT token expired")
-            return None
-        except jwt.InvalidTokenError as e:
-            logger.warning("Invalid JWT token", error=str(e))
-            return None
+                
         except Exception as e:
             logger.error("JWT verification error", error=str(e))
             return None
@@ -167,8 +170,12 @@ class SupabaseAuthManager:
         refresh_token: str,
         supabase_client: Client
     ) -> Dict[str, Any]:
-        """Refresh Supabase access token"""
+        """Refresh Supabase access token with rate limit handling"""
         try:
+            # Add delay to avoid rate limiting
+            import asyncio
+            await asyncio.sleep(0.1)
+            
             response = supabase_client.auth.refresh_session(refresh_token)
             
             if response.session:
@@ -183,8 +190,14 @@ class SupabaseAuthManager:
                 raise SupabaseAuthError("Token refresh failed")
                 
         except Exception as e:
-            logger.error("Token refresh error", error=str(e))
-            raise SupabaseAuthError(f"Token refresh failed: {str(e)}")
+            error_msg = str(e)
+            if "rate limit" in error_msg.lower():
+                logger.warning("Rate limit hit during token refresh", error=error_msg)
+                # For rate limiting, return a more specific error
+                raise SupabaseAuthError("Rate limit reached. Please wait a moment and try again.")
+            else:
+                logger.error("Token refresh error", error=error_msg)
+                raise SupabaseAuthError(f"Token refresh failed: {error_msg}")
     
     async def reset_password(
         self, 

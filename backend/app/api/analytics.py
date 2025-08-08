@@ -434,62 +434,131 @@ async def get_creator_analytics(
     creator_id: str,
     days: int = Query(default=30, ge=1, le=365),
     current_user_id: str = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db_session)
+    supabase_client = Depends(get_supabase)
 ) -> CreatorAnalyticsSchema:
     """
     Get creator performance analytics
     Creators can only view their own analytics unless admin
     """
     try:
-        # Check permissions
+        # Basic permission check - user can only view their own analytics
         if creator_id != current_user_id:
-            user_result = await db.execute(
-                select(UserProfile).where(UserProfile.id == current_user_id)
-            )
-            current_user = user_result.scalar_one_or_none()
-            if not current_user or current_user.role != "admin":
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Not authorized to view other creators' analytics"
-                )
-        
-        # Verify creator exists and has creator role
-        creator_result = await db.execute(
-            select(UserProfile).where(UserProfile.id == creator_id)
-        )
-        creator = creator_result.scalar_one_or_none()
-        if not creator:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Creator not found"
-            )
-        
-        if creator.role not in ["creator", "admin"]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="User is not a creator"
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to view other creators' analytics"
             )
         
         end_date = datetime.utcnow()
         start_date = end_date - timedelta(days=days)
         
-        # Get creator's clones and their sessions
-        clones_result = await db.execute(
-            select(Clone).where(Clone.creator_id == creator_id)
-        )
-        clones = clones_result.scalars().all()
+        # Query creator's clones from Supabase
+        clones_response = supabase_client.table("clones").select("id").eq("creator_id", creator_id).execute()
         
-        if not clones:
+        if not clones_response.data:
+            # No clones found, return empty analytics
             return CreatorAnalyticsSchema(
                 total_earnings=0.0,
                 total_sessions=0,
                 average_rating=0.0,
                 user_retention_rate=0.0,
                 popular_topics=[],
-                monthly_trends={"earnings": [0]*6, "sessions": [0]*6, "ratings": [0]*6}
+                monthly_trends={
+                    "earnings": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    "sessions": [0, 0, 0, 0, 0, 0],
+                    "ratings": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                }
             )
         
-        clone_ids = [clone.id for clone in clones]
+        clone_ids = [clone["id"] for clone in clones_response.data]
+        
+        # Query sessions for creator's clones from Supabase
+        sessions_response = supabase_client.table("sessions").select(
+            "id, clone_id, user_id, total_cost, user_rating, start_time, duration_minutes"
+        ).in_("clone_id", clone_ids).gte("start_time", start_date.isoformat()).execute()
+        
+        sessions = sessions_response.data if sessions_response.data else []
+        
+        # Calculate basic metrics
+        total_sessions = len(sessions)
+        total_earnings = sum(float(session.get("total_cost", 0) or 0) for session in sessions)
+        
+        # Calculate average rating
+        rated_sessions = [s for s in sessions if s.get("user_rating") is not None]
+        average_rating = (sum(float(s["user_rating"]) for s in rated_sessions) / len(rated_sessions)) if rated_sessions else 0.0
+        
+        # Calculate user retention rate (users who had multiple sessions)
+        user_session_counts = {}
+        for session in sessions:
+            user_id = session["user_id"]
+            user_session_counts[user_id] = user_session_counts.get(user_id, 0) + 1
+        
+        returning_users = sum(1 for count in user_session_counts.values() if count > 1)
+        total_unique_users = len(user_session_counts)
+        user_retention_rate = (returning_users / total_unique_users * 100) if total_unique_users > 0 else 0.0
+        
+        # Get popular topics from session summaries
+        session_ids = [session["id"] for session in sessions]
+        if session_ids:
+            summaries_response = supabase_client.table("session_summaries").select(
+                "main_topics"
+            ).in_("session_id", session_ids).execute()
+            
+            all_topics = []
+            for summary in summaries_response.data if summaries_response.data else []:
+                if summary.get("main_topics"):
+                    all_topics.extend(summary["main_topics"])
+            
+            # Count topic frequency
+            topic_counts = {}
+            for topic in all_topics:
+                topic_counts[topic] = topic_counts.get(topic, 0) + 1
+            
+            popular_topics = sorted(topic_counts.keys(), 
+                                  key=lambda x: topic_counts[x], reverse=True)[:10]
+        else:
+            popular_topics = []
+        
+        # Monthly trends (last 6 months)
+        monthly_trends = {"earnings": [], "sessions": [], "ratings": []}
+        for i in range(6):
+            month_start = (end_date.replace(day=1) - timedelta(days=32*i)).replace(day=1)
+            month_end = (month_start + timedelta(days=32)).replace(day=1)
+            
+            month_sessions = [s for s in sessions 
+                            if month_start <= datetime.fromisoformat(s["start_time"].replace('Z', '+00:00')) < month_end]
+            
+            month_earnings = sum(float(s.get("total_cost", 0) or 0) for s in month_sessions)
+            month_rated_sessions = [s for s in month_sessions if s.get("user_rating") is not None]
+            month_avg_rating = (sum(float(s["user_rating"]) for s in month_rated_sessions) / len(month_rated_sessions)) if month_rated_sessions else 0.0
+            
+            monthly_trends["earnings"].append(month_earnings)
+            monthly_trends["sessions"].append(len(month_sessions))
+            monthly_trends["ratings"].append(month_avg_rating)
+        
+        # Reverse to show chronological order
+        for key in monthly_trends:
+            monthly_trends[key].reverse()
+        
+        logger.info("Creator analytics retrieved from Supabase", 
+                   creator_id=creator_id, 
+                   total_sessions=total_sessions,
+                   total_earnings=total_earnings)
+        
+        return CreatorAnalyticsSchema(
+            total_earnings=total_earnings,
+            total_sessions=total_sessions,
+            average_rating=average_rating,
+            user_retention_rate=user_retention_rate,
+            popular_topics=popular_topics,
+            monthly_trends=monthly_trends
+        )
+        
+    except Exception as e:
+        logger.error("Creator analytics error", error=str(e), creator_id=creator_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve creator analytics"
+        )
         
         # Get sessions for creator's clones
         sessions_result = await db.execute(

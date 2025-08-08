@@ -6,6 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Progress } from "@/components/ui/progress"
+import { useWebRTC } from "@/hooks/use-webrtc"
+import { useAuth } from "@/contexts/auth-context"
+import { CallQualityMonitor, CallQualityIndicator } from "@/components/ui/call-quality-monitor"
 import {
   Mic,
   MicOff,
@@ -18,8 +21,6 @@ import {
   Star,
   MessageCircle,
   Video,
-  User,
-  LogOut,
 } from "lucide-react"
 import Link from "next/link"
 import { motion } from "framer-motion"
@@ -38,36 +39,64 @@ const expertData = {
 }
 
 export default function VoiceCallPage({ params }: { params: { id: string } }) {
-  const [isConnected, setIsConnected] = useState(false)
-  const [isConnecting, setIsConnecting] = useState(false)
-  const [isMuted, setIsMuted] = useState(false)
-  const [isSpeakerOn, setIsSpeakerOn] = useState(true)
-  const [callDuration, setCallDuration] = useState(0)
-  const [currentCost, setCurrentCost] = useState(0)
-  const [connectionQuality, setConnectionQuality] = useState(95)
+  const { user } = useAuth()
   const [isDemo, setIsDemo] = useState(true)
   const [demoTimeLeft, setDemoTimeLeft] = useState(300) // 5 minutes demo
+  const [isSpeakerOn, setIsSpeakerOn] = useState(true)
+  const [showQualityMonitor, setShowQualityMonitor] = useState(false)
+  
+  // WebRTC hook for call management
+  const {
+    isSupported,
+    connectionState,
+    callState,
+    currentSession,
+    error,
+    isInitializing,
+    isMuted,
+    callQuality,
+    audioStats,
+    videoStats,
+    processingEnabled,
+    startCall,
+    endCall,
+    toggleMute,
+    setVideoQuality,
+    toggleAudioProcessing,
+    formatDuration,
+    getQualityDisplay,
+    getDetailedQualityInfo,
+    isConnecting,
+    isConnected,
+    callDuration,
+    callCost,
+    connectionQuality,
+    audioQuality,
+    noiseLevel
+  } = useWebRTC({
+    onCallEnded: () => {
+      setDemoTimeLeft(300)
+    },
+    onError: (error) => {
+      console.error('Voice call error:', error)
+    }
+  })
 
   useEffect(() => {
     let interval: NodeJS.Timeout
-    if (isConnected) {
+    if (isConnected && isDemo) {
       interval = setInterval(() => {
-        setCallDuration((prev) => prev + 1)
-        setCurrentCost((prev) => prev + expertData.pricePerMinute / 60)
-
-        if (isDemo && demoTimeLeft > 0) {
+        if (demoTimeLeft > 0) {
           setDemoTimeLeft((prev) => prev - 1)
+        } else {
+          // Demo time expired, end call
+          endCall()
         }
       }, 1000)
     }
     return () => clearInterval(interval)
-  }, [isConnected, isDemo, demoTimeLeft])
+  }, [isConnected, isDemo, demoTimeLeft, endCall])
 
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = seconds % 60
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
-  }
 
   const formatDemoTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -75,63 +104,29 @@ export default function VoiceCallPage({ params }: { params: { id: string } }) {
     return `${mins}:${secs.toString().padStart(2, "0")}`
   }
 
-  const handleConnect = () => {
-    setIsConnecting(true)
-    setTimeout(() => {
-      setIsConnecting(false)
-      setIsConnected(true)
-    }, 3000)
+  const handleConnect = async () => {
+    if (!user) {
+      console.error('User not authenticated')
+      return
+    }
+    
+    try {
+      await startCall(params.id, 'voice')
+    } catch (error) {
+      console.error('Failed to start voice call:', error)
+    }
   }
 
-  const handleDisconnect = () => {
-    setIsConnected(false)
-    setCallDuration(0)
-    setCurrentCost(0)
-    setDemoTimeLeft(300)
+  const handleDisconnect = async () => {
+    try {
+      await endCall()
+    } catch (error) {
+      console.error('Failed to end voice call:', error)
+    }
   }
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
-      {/* Navigation */}
-      <nav className="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-4 sm:space-x-8">
-              <Link
-                href="/"
-                className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-slate-900 to-slate-600 dark:from-white dark:to-slate-300 bg-clip-text text-transparent"
-              >
-                CloneAI
-              </Link>
-              <div className="hidden md:flex space-x-6">
-                <Link
-                  href="/discover"
-                  className="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors"
-                >
-                  Discover
-                </Link>
-                <Link
-                  href="/dashboard"
-                  className="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors"
-                >
-                  Dashboard
-                </Link>
-              </div>
-            </div>
-            <div className="flex items-center space-x-2 sm:space-x-4">
-              <Link href="/profile">
-                <Button variant="outline" size="sm">
-                  <User className="h-4 w-4 mr-2" />
-                  <span className="hidden sm:inline">Profile</span>
-                </Button>
-              </Link>
-              <Button variant="ghost" size="sm">
-                <LogOut className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        </div>
-      </nav>
 
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
@@ -193,32 +188,54 @@ export default function VoiceCallPage({ params }: { params: { id: string } }) {
 
                 {/* Connection Status */}
                 <div className="mb-6">
-                  {isConnecting && (
+                  {(isConnecting || isInitializing) && (
                     <div className="space-y-4">
-                      <div className="text-lg font-medium text-blue-600 dark:text-blue-400">Connecting...</div>
-                      <Progress value={66} className="w-full max-w-xs mx-auto" />
+                      <div className="text-lg font-medium text-blue-600 dark:text-blue-400">
+                        {isInitializing ? 'Initializing...' : 'Connecting...'}
+                      </div>
+                      <Progress value={isInitializing ? 33 : 66} className="w-full max-w-xs mx-auto" />
+                      {connectionState && (
+                        <div className="text-sm text-slate-500">Status: {connectionState}</div>
+                      )}
                     </div>
                   )}
                   {isConnected && (
                     <div className="space-y-2">
                       <div className="text-lg font-medium text-green-600">Connected</div>
                       <div className="text-2xl font-bold text-slate-900 dark:text-white">
-                        {formatTime(callDuration)}
+                        {formatDuration(callDuration)}
                       </div>
                       <div className="text-sm text-slate-600 dark:text-slate-300">
-                        Connection Quality: {connectionQuality}%
+                        Connection Quality: {connectionQuality}% ({getQualityDisplay()})
                       </div>
+                      {error && (
+                        <div className="text-sm text-red-500">Error: {error}</div>
+                      )}
                     </div>
                   )}
-                  {!isConnected && !isConnecting && (
-                    <div className="text-lg font-medium text-slate-600 dark:text-slate-300">Ready to connect</div>
+                  {!isConnected && !isConnecting && !isInitializing && (
+                    <div className="space-y-2">
+                      <div className="text-lg font-medium text-slate-600 dark:text-slate-300">
+                        {isSupported ? 'Ready to connect' : 'WebRTC not supported'}
+                      </div>
+                      {!isSupported && (
+                        <div className="text-sm text-orange-500">
+                          Your browser doesn't support WebRTC calls
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
 
                 {/* Call Controls */}
                 <div className="flex justify-center space-x-4">
-                  {!isConnected && !isConnecting && (
-                    <Button onClick={handleConnect} size="lg" className="bg-green-600 hover:bg-green-700">
+                  {!isConnected && !isConnecting && !isInitializing && (
+                    <Button 
+                      onClick={handleConnect} 
+                      size="lg" 
+                      className="bg-green-600 hover:bg-green-700"
+                      disabled={!isSupported || !user}
+                    >
                       <Phone className="h-5 w-5 mr-2" />
                       Start Call
                     </Button>
@@ -229,8 +246,9 @@ export default function VoiceCallPage({ params }: { params: { id: string } }) {
                       <Button
                         variant={isMuted ? "destructive" : "outline"}
                         size="lg"
-                        onClick={() => setIsMuted(!isMuted)}
+                        onClick={toggleMute}
                         className={!isMuted ? "bg-transparent" : ""}
+                        title={isMuted ? "Unmute microphone" : "Mute microphone"}
                       >
                         {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
                       </Button>
@@ -251,15 +269,31 @@ export default function VoiceCallPage({ params }: { params: { id: string } }) {
                   )}
                 </div>
 
-                {isConnecting && (
+                {(isConnecting || isInitializing) && (
                   <div className="mt-4">
-                    <Button variant="outline" onClick={() => setIsConnecting(false)} className="bg-transparent">
+                    <Button variant="outline" onClick={handleDisconnect} className="bg-transparent">
                       Cancel
                     </Button>
                   </div>
                 )}
               </CardContent>
             </Card>
+
+            {/* Call Quality Monitor */}
+            {isConnected && (
+              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
+                <CallQualityMonitor
+                  callQuality={callQuality}
+                  audioStats={audioStats}
+                  videoStats={videoStats}
+                  processingEnabled={processingEnabled}
+                  onToggleProcessing={toggleAudioProcessing}
+                  onSetVideoQuality={setVideoQuality}
+                  isExpanded={showQualityMonitor}
+                  onToggleExpanded={() => setShowQualityMonitor(!showQualityMonitor)}
+                />
+              </motion.div>
+            )}
 
             {/* Session Info */}
             {isConnected && (
@@ -276,7 +310,7 @@ export default function VoiceCallPage({ params }: { params: { id: string } }) {
                           <span className="text-sm text-slate-600 dark:text-slate-300">Duration</span>
                         </div>
                         <div className="text-xl font-bold text-slate-900 dark:text-white">
-                          {formatTime(callDuration)}
+                          {formatDuration(callDuration)}
                         </div>
                       </div>
                       <div className="text-center">
@@ -285,7 +319,7 @@ export default function VoiceCallPage({ params }: { params: { id: string } }) {
                           <span className="text-sm text-slate-600 dark:text-slate-300">Current Cost</span>
                         </div>
                         <div className="text-xl font-bold text-slate-900 dark:text-white">
-                          {isDemo ? "FREE" : `$${currentCost.toFixed(2)}`}
+                          {isDemo ? "FREE" : `$${callCost.toFixed(2)}`}
                         </div>
                       </div>
                       <div className="text-center">
@@ -293,7 +327,14 @@ export default function VoiceCallPage({ params }: { params: { id: string } }) {
                           <Star className="h-4 w-4 text-slate-500" />
                           <span className="text-sm text-slate-600 dark:text-slate-300">Quality</span>
                         </div>
-                        <div className="text-xl font-bold text-slate-900 dark:text-white">{connectionQuality}%</div>
+                        <div className="text-xl font-bold text-slate-900 dark:text-white">
+                          {connectionQuality}% ({getQualityDisplay()})
+                        </div>
+                        {audioQuality > 0 && (
+                          <div className="text-sm text-slate-500">
+                            Audio: {audioQuality}% | Noise: {noiseLevel.toFixed(1)}dB
+                          </div>
+                        )}
                       </div>
                     </div>
                   </CardContent>

@@ -1,11 +1,14 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Progress } from "@/components/ui/progress"
+import { useWebRTC } from "@/hooks/use-webrtc"
+import { useAuth } from "@/contexts/auth-context"
+import { CallQualityMonitor, CallQualityIndicator } from "@/components/ui/call-quality-monitor"
 import {
   Video,
   VideoOff,
@@ -18,8 +21,6 @@ import {
   DollarSign,
   Star,
   MessageCircle,
-  User,
-  LogOut,
   Maximize,
   Minimize,
 } from "lucide-react"
@@ -40,38 +41,76 @@ const expertData = {
 }
 
 export default function VideoCallPage({ params }: { params: { id: string } }) {
-  const [isConnected, setIsConnected] = useState(false)
-  const [isConnecting, setIsConnecting] = useState(false)
-  const [isMuted, setIsMuted] = useState(false)
+  const { user } = useAuth()
   const [isVideoOn, setIsVideoOn] = useState(true)
   const [isSpeakerOn, setIsSpeakerOn] = useState(true)
   const [isFullscreen, setIsFullscreen] = useState(false)
-  const [callDuration, setCallDuration] = useState(0)
-  const [currentCost, setCurrentCost] = useState(0)
-  const [connectionQuality, setConnectionQuality] = useState(98)
   const [isDemo, setIsDemo] = useState(true)
   const [demoTimeLeft, setDemoTimeLeft] = useState(300) // 5 minutes demo
+  const [showQualityMonitor, setShowQualityMonitor] = useState(false)
+  
+  // WebRTC hook for call management
+  const {
+    isSupported,
+    connectionState,
+    callState,
+    currentSession,
+    error,
+    isInitializing,
+    isMuted,
+    isCameraOff,
+    callQuality,
+    audioStats,
+    videoStats,
+    processingEnabled,
+    startCall,
+    endCall,
+    toggleMute,
+    toggleCamera,
+    setVideoQuality,
+    toggleAudioProcessing,
+    formatDuration,
+    getQualityDisplay,
+    getDetailedQualityInfo,
+    localVideoRef,
+    remoteVideoRef,
+    isConnecting,
+    isConnected,
+    callDuration,
+    callCost,
+    connectionQuality,
+    audioQuality,
+    videoQuality
+  } = useWebRTC({
+    onCallEnded: () => {
+      setDemoTimeLeft(300)
+      setIsFullscreen(false)
+    },
+    onError: (error) => {
+      console.error('Video call error:', error)
+    }
+  })
+  
+  // Update local video on state when camera toggles
+  useEffect(() => {
+    setIsVideoOn(!isCameraOff)
+  }, [isCameraOff])
 
   useEffect(() => {
     let interval: NodeJS.Timeout
-    if (isConnected) {
+    if (isConnected && isDemo) {
       interval = setInterval(() => {
-        setCallDuration((prev) => prev + 1)
-        setCurrentCost((prev) => prev + expertData.pricePerMinute / 60)
-
-        if (isDemo && demoTimeLeft > 0) {
+        if (demoTimeLeft > 0) {
           setDemoTimeLeft((prev) => prev - 1)
+        } else {
+          // Demo time expired, end call
+          endCall()
         }
       }, 1000)
     }
     return () => clearInterval(interval)
-  }, [isConnected, isDemo, demoTimeLeft])
+  }, [isConnected, isDemo, demoTimeLeft, endCall])
 
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60)
-    const secs = seconds % 60
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
-  }
 
   const formatDemoTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -79,66 +118,35 @@ export default function VideoCallPage({ params }: { params: { id: string } }) {
     return `${mins}:${secs.toString().padStart(2, "0")}`
   }
 
-  const handleConnect = () => {
-    setIsConnecting(true)
-    setTimeout(() => {
-      setIsConnecting(false)
-      setIsConnected(true)
-    }, 3000)
+  const handleConnect = async () => {
+    if (!user) {
+      console.error('User not authenticated')
+      return
+    }
+    
+    try {
+      await startCall(params.id, 'video')
+    } catch (error) {
+      console.error('Failed to start video call:', error)
+    }
   }
 
-  const handleDisconnect = () => {
-    setIsConnected(false)
-    setCallDuration(0)
-    setCurrentCost(0)
-    setDemoTimeLeft(300)
-    setIsFullscreen(false)
+  const handleDisconnect = async () => {
+    try {
+      await endCall()
+      setIsFullscreen(false)
+    } catch (error) {
+      console.error('Failed to end video call:', error)
+    }
+  }
+  
+  const handleToggleCamera = () => {
+    const newState = toggleCamera()
+    setIsVideoOn(!newState)
   }
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
-      {/* Navigation */}
-      {!isFullscreen && (
-        <nav className="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/80 backdrop-blur-sm sticky top-0 z-50">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-center h-16">
-              <div className="flex items-center space-x-4 sm:space-x-8">
-                <Link
-                  href="/"
-                  className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-slate-900 to-slate-600 dark:from-white dark:to-slate-300 bg-clip-text text-transparent"
-                >
-                  CloneAI
-                </Link>
-                <div className="hidden md:flex space-x-6">
-                  <Link
-                    href="/discover"
-                    className="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors"
-                  >
-                    Discover
-                  </Link>
-                  <Link
-                    href="/dashboard"
-                    className="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors"
-                  >
-                    Dashboard
-                  </Link>
-                </div>
-              </div>
-              <div className="flex items-center space-x-2 sm:space-x-4">
-                <Link href="/profile">
-                  <Button variant="outline" size="sm">
-                    <User className="h-4 w-4 mr-2" />
-                    <span className="hidden sm:inline">Profile</span>
-                  </Button>
-                </Link>
-                <Button variant="ghost" size="sm">
-                  <LogOut className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          </div>
-        </nav>
-      )}
 
       <div
         className={`${isFullscreen ? "fixed inset-0 z-50 bg-black" : "max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8"}`}
@@ -178,9 +186,20 @@ export default function VideoCallPage({ params }: { params: { id: string } }) {
                 <div
                   className={`relative ${isFullscreen ? "h-full" : "aspect-video"} bg-gradient-to-br from-slate-900 to-slate-700 rounded-lg overflow-hidden`}
                 >
-                  {/* Expert Video */}
+                  {/* Remote Video Stream */}
+                  <div className="absolute inset-0">
+                    <video 
+                      ref={remoteVideoRef}
+                      autoPlay 
+                      playsInline 
+                      className="w-full h-full object-cover"
+                      style={{ display: isConnected ? 'block' : 'none' }}
+                    />
+                  </div>
+                  
+                  {/* Expert Placeholder */}
                   <div className="absolute inset-0 flex items-center justify-center">
-                    {isConnected && isVideoOn ? (
+                    {!isConnected || !remoteVideoRef.current?.srcObject ? (
                       <motion.div
                         initial={{ opacity: 0, scale: 0.9 }}
                         animate={{ opacity: 1, scale: 1 }}
@@ -213,32 +232,57 @@ export default function VideoCallPage({ params }: { params: { id: string } }) {
                           </AvatarFallback>
                         </Avatar>
                         <h3 className="text-xl font-semibold mb-2">{expertData.name}</h3>
-                        {isConnecting && (
+                        {(isConnecting || isInitializing) && (
                           <div className="space-y-4">
-                            <div className="text-lg">Connecting...</div>
-                            <Progress value={66} className="w-64 mx-auto" />
+                            <div className="text-lg">
+                              {isInitializing ? 'Initializing...' : 'Connecting...'}
+                            </div>
+                            <Progress value={isInitializing ? 33 : 66} className="w-64 mx-auto" />
+                            {connectionState && (
+                              <div className="text-sm text-white/70">Status: {connectionState}</div>
+                            )}
                           </div>
                         )}
-                        {!isConnected && !isConnecting && (
+                        {!isConnected && !isConnecting && !isInitializing && (
                           <div className="space-y-4">
-                            <p className="text-white/80">Ready to start video call</p>
-                            <Button onClick={handleConnect} size="lg" className="bg-green-600 hover:bg-green-700">
+                            <p className="text-white/80">
+                              {isSupported ? 'Ready to start video call' : 'WebRTC not supported'}
+                            </p>
+                            {!isSupported && (
+                              <div className="text-sm text-orange-300">
+                                Your browser doesn't support WebRTC calls
+                              </div>
+                            )}
+                            <Button 
+                              onClick={handleConnect} 
+                              size="lg" 
+                              className="bg-green-600 hover:bg-green-700"
+                              disabled={!isSupported || !user}
+                            >
                               <Video className="h-5 w-5 mr-2" />
                               Start Video Call
                             </Button>
                           </div>
                         )}
+                        {error && (
+                          <div className="text-sm text-red-300 mt-2">Error: {error}</div>
+                        )}
                       </div>
-                    )}
+                    ) : null}
                   </div>
 
-                  {/* User Video (Picture-in-Picture) */}
+                  {/* Local Video (Picture-in-Picture) */}
                   {isConnected && (
                     <div className="absolute bottom-4 right-4 w-32 h-24 bg-slate-800 rounded-lg border-2 border-white/20 overflow-hidden">
                       {isVideoOn ? (
-                        <div className="w-full h-full bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center">
-                          <div className="text-white text-xs">You</div>
-                        </div>
+                        <video 
+                          ref={localVideoRef}
+                          autoPlay 
+                          playsInline 
+                          muted 
+                          className="w-full h-full object-cover" 
+                          style={{ transform: 'scaleX(-1)' }}
+                        />
                       ) : (
                         <div className="w-full h-full bg-slate-900 flex items-center justify-center">
                           <VideoOff className="h-6 w-6 text-white/60" />
@@ -247,18 +291,21 @@ export default function VideoCallPage({ params }: { params: { id: string } }) {
                     </div>
                   )}
 
-                  {/* Connection Status */}
+                  {/* Enhanced Connection Status */}
                   {isConnected && (
-                    <div className="absolute top-4 right-4 flex items-center space-x-2 bg-black/50 rounded-full px-3 py-1">
-                      <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                      <span className="text-white text-sm">{connectionQuality}%</span>
+                    <div className="absolute top-4 right-4">
+                      <CallQualityIndicator
+                        overallQuality={Math.round((connectionQuality + audioQuality + videoQuality) / 3)}
+                        audioLevel={audioStats?.inputLevel || 0}
+                        connectionState={connectionState}
+                      />
                     </div>
                   )}
 
                   {/* Call Duration */}
                   {isConnected && (
                     <div className="absolute top-4 left-4 bg-black/50 rounded-full px-3 py-1">
-                      <span className="text-white text-sm font-mono">{formatTime(callDuration)}</span>
+                      <span className="text-white text-sm font-mono">{formatDuration(callDuration)}</span>
                     </div>
                   )}
 
@@ -277,8 +324,9 @@ export default function VideoCallPage({ params }: { params: { id: string } }) {
                       <Button
                         variant={isMuted ? "destructive" : "outline"}
                         size="lg"
-                        onClick={() => setIsMuted(!isMuted)}
+                        onClick={toggleMute}
                         className={`${isFullscreen ? "bg-black/50 border-white/20 text-white hover:bg-black/70" : !isMuted ? "bg-transparent" : ""}`}
+                        title={isMuted ? "Unmute microphone" : "Mute microphone"}
                       >
                         {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
                       </Button>
@@ -286,8 +334,9 @@ export default function VideoCallPage({ params }: { params: { id: string } }) {
                       <Button
                         variant={!isVideoOn ? "destructive" : "outline"}
                         size="lg"
-                        onClick={() => setIsVideoOn(!isVideoOn)}
+                        onClick={handleToggleCamera}
                         className={`${isFullscreen ? "bg-black/50 border-white/20 text-white hover:bg-black/70" : isVideoOn ? "bg-transparent" : ""}`}
+                        title={isVideoOn ? "Turn off camera" : "Turn on camera"}
                       >
                         {isVideoOn ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
                       </Button>
@@ -317,15 +366,31 @@ export default function VideoCallPage({ params }: { params: { id: string } }) {
                   </div>
                 )}
 
-                {isConnecting && (
+                {(isConnecting || isInitializing) && (
                   <div className="p-6 text-center">
-                    <Button variant="outline" onClick={() => setIsConnecting(false)} className="bg-transparent">
+                    <Button variant="outline" onClick={handleDisconnect} className="bg-transparent">
                       Cancel
                     </Button>
                   </div>
                 )}
               </CardContent>
             </Card>
+
+            {/* Call Quality Monitor */}
+            {isConnected && !isFullscreen && (
+              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
+                <CallQualityMonitor
+                  callQuality={callQuality}
+                  audioStats={audioStats}
+                  videoStats={videoStats}
+                  processingEnabled={processingEnabled}
+                  onToggleProcessing={toggleAudioProcessing}
+                  onSetVideoQuality={setVideoQuality}
+                  isExpanded={showQualityMonitor}
+                  onToggleExpanded={() => setShowQualityMonitor(!showQualityMonitor)}
+                />
+              </motion.div>
+            )}
 
             {/* Session Info */}
             {isConnected && !isFullscreen && (
@@ -342,7 +407,7 @@ export default function VideoCallPage({ params }: { params: { id: string } }) {
                           <span className="text-sm text-slate-600 dark:text-slate-300">Duration</span>
                         </div>
                         <div className="text-xl font-bold text-slate-900 dark:text-white">
-                          {formatTime(callDuration)}
+                          {formatDuration(callDuration)}
                         </div>
                       </div>
                       <div className="text-center">
@@ -351,7 +416,7 @@ export default function VideoCallPage({ params }: { params: { id: string } }) {
                           <span className="text-sm text-slate-600 dark:text-slate-300">Current Cost</span>
                         </div>
                         <div className="text-xl font-bold text-slate-900 dark:text-white">
-                          {isDemo ? "FREE" : `$${currentCost.toFixed(2)}`}
+                          {isDemo ? "FREE" : `$${callCost.toFixed(2)}`}
                         </div>
                       </div>
                       <div className="text-center">
@@ -359,7 +424,12 @@ export default function VideoCallPage({ params }: { params: { id: string } }) {
                           <Star className="h-4 w-4 text-slate-500" />
                           <span className="text-sm text-slate-600 dark:text-slate-300">Quality</span>
                         </div>
-                        <div className="text-xl font-bold text-slate-900 dark:text-white">{connectionQuality}%</div>
+                        <div className="text-xl font-bold text-slate-900 dark:text-white">
+                          {connectionQuality}% ({getQualityDisplay()})
+                        </div>
+                        <div className="text-sm text-slate-500">
+                          Audio: {audioQuality}% | Video: {videoQuality}%
+                        </div>
                       </div>
                     </div>
                   </CardContent>

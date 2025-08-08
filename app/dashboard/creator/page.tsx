@@ -1,6 +1,9 @@
 "use client"
 
 import { useState } from "react"
+import { useCreatorDashboard, useCloneManagement } from "@/hooks/use-dashboard"
+import { useAuth } from '@/contexts/auth-context'
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -22,8 +25,9 @@ import {
   Mic,
   Video,
   BarChart3,
-  LogOut,
-  User,
+  Loader2,
+  AlertCircle,
+  RefreshCw,
 } from "lucide-react"
 import Link from "next/link"
 import { motion } from "framer-motion"
@@ -127,53 +131,76 @@ const monthlyStats = {
 }
 
 export default function CreatorDashboardPage() {
+  const { user } = useAuth()
   const [selectedTab, setSelectedTab] = useState("overview")
+  
+  // Use hooks for real data
+  const { 
+    analytics, 
+    clones, 
+    sessions, 
+    stats, 
+    loading, 
+    error, 
+    refresh 
+  } = useCreatorDashboard(user?.id || '', 30)
+  
+  const {
+    updateCloneStatus,
+    deleteClone,
+    loading: cloneActionLoading,
+    error: cloneActionError
+  } = useCloneManagement()
+
+  // Loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center">
+        <div className="flex items-center space-x-2">
+          <Loader2 className="h-6 w-6 animate-spin" />
+          <span>Loading creator dashboard...</span>
+        </div>
+      </div>
+    )
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 p-8">
+        <Alert variant="destructive" className="max-w-md mx-auto">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            {error}
+            <Button variant="outline" size="sm" className="mt-2 w-full" onClick={refresh}>
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Try Again
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    )
+  }
+  
+  const handleCloneStatusToggle = async (cloneId: string, currentStatus: string) => {
+    const newStatus = currentStatus === 'active' ? 'paused' : 'active'
+    const success = await updateCloneStatus(cloneId, newStatus)
+    if (success) {
+      refresh() // Refresh dashboard data
+    }
+  }
+  
+  const handleDeleteClone = async (cloneId: string) => {
+    if (window.confirm('Are you sure you want to delete this clone? This action cannot be undone.')) {
+      const success = await deleteClone(cloneId)
+      if (success) {
+        refresh() // Refresh dashboard data
+      }
+    }
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
-      {/* Navigation */}
-      <nav className="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-4 sm:space-x-8">
-              <Link
-                href="/"
-                className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-slate-900 to-slate-600 dark:from-white dark:to-slate-300 bg-clip-text text-transparent"
-              >
-                CloneAI
-              </Link>
-              <div className="hidden md:flex space-x-6">
-                <Link href="/dashboard/creator" className="text-blue-600 dark:text-blue-400 font-medium">
-                  Creator Dashboard
-                </Link>
-                <Link
-                  href="/dashboard"
-                  className="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors"
-                >
-                  User Dashboard
-                </Link>
-              </div>
-            </div>
-            <div className="flex items-center space-x-2 sm:space-x-4">
-              <Link href="/create-clone/wizard">
-                <Button size="sm">
-                  <Plus className="h-4 w-4 mr-2" />
-                  <span className="hidden sm:inline">Create Clone</span>
-                </Button>
-              </Link>
-              <Link href="/profile">
-                <Button variant="outline" size="sm">
-                  <User className="h-4 w-4 mr-2" />
-                  <span className="hidden sm:inline">Profile</span>
-                </Button>
-              </Link>
-              <Button variant="ghost" size="sm">
-                <LogOut className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        </div>
-      </nav>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
@@ -202,7 +229,7 @@ export default function CreatorDashboardPage() {
                     </div>
                     <div className="mt-2">
                       <div className="text-2xl font-bold text-slate-900 dark:text-white">
-                        ${monthlyStats.totalEarnings}
+                        ${stats?.totalEarnings?.toFixed(2) || '0.00'}
                       </div>
                       <p className="text-xs text-slate-500">This month</p>
                     </div>
@@ -223,7 +250,7 @@ export default function CreatorDashboardPage() {
                     </div>
                     <div className="mt-2">
                       <div className="text-2xl font-bold text-slate-900 dark:text-white">
-                        {monthlyStats.totalSessions}
+                        {stats?.totalSessions || 0}
                       </div>
                       <p className="text-xs text-slate-500">This month</p>
                     </div>
@@ -244,7 +271,7 @@ export default function CreatorDashboardPage() {
                     </div>
                     <div className="mt-2">
                       <div className="text-2xl font-bold text-slate-900 dark:text-white">
-                        {monthlyStats.averageRating}
+                        {stats?.averageRating?.toFixed(1) || '0.0'}
                       </div>
                       <p className="text-xs text-slate-500">Out of 5.0</p>
                     </div>
@@ -265,7 +292,7 @@ export default function CreatorDashboardPage() {
                     </div>
                     <div className="mt-2">
                       <div className="text-2xl font-bold text-slate-900 dark:text-white">
-                        +{monthlyStats.growthRate}%
+                        +{stats?.growthRate?.toFixed(1) || '0.0'}%
                       </div>
                       <p className="text-xs text-slate-500">vs last month</p>
                     </div>
@@ -289,7 +316,7 @@ export default function CreatorDashboardPage() {
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {myClones.slice(0, 3).map((clone, index) => {
+                  {clones.slice(0, 3).map((clone, index) => {
                     const typeConfig = expertTypes[clone.type as keyof typeof expertTypes]
                     return (
                       <motion.div
@@ -357,7 +384,12 @@ export default function CreatorDashboardPage() {
                                   View
                                 </Button>
                               </Link>
-                              <Button variant="outline" size="sm" className="bg-transparent">
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                className="bg-transparent"
+                                onClick={() => window.location.href = `/create-clone/wizard?edit=${clone.id}`}
+                              >
                                 <Edit className="h-4 w-4" />
                               </Button>
                             </div>
@@ -377,7 +409,13 @@ export default function CreatorDashboardPage() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {recentSessions.map((session, index) => (
+                  {sessions.length === 0 ? (
+                    <div className="text-center py-8 text-slate-500">
+                      <MessageCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      <p>No sessions yet</p>
+                    </div>
+                  ) : (
+                    sessions.slice(0, 5).map((session, index) => (
                     <motion.div
                       key={session.id}
                       initial={{ opacity: 0, x: -20 }}
@@ -418,7 +456,8 @@ export default function CreatorDashboardPage() {
                         ))}
                       </div>
                     </motion.div>
-                  ))}
+                    ))
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -436,7 +475,7 @@ export default function CreatorDashboardPage() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {myClones.map((clone) => {
+              {clones.map((clone) => {
                 const typeConfig = expertTypes[clone.type as keyof typeof expertTypes]
                 return (
                   <Card key={clone.id} className="hover:shadow-lg transition-all duration-300">
@@ -525,10 +564,21 @@ export default function CreatorDashboardPage() {
                             View
                           </Button>
                         </Link>
-                        <Button variant="outline" size="sm" className="bg-transparent">
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="bg-transparent"
+                          onClick={() => window.location.href = `/create-clone/wizard?edit=${clone.id}`}
+                        >
                           <Edit className="h-4 w-4" />
                         </Button>
-                        <Button variant="outline" size="sm" className="bg-transparent">
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="bg-transparent"
+                          onClick={() => handleCloneStatusToggle(clone.id, clone.status)}
+                          disabled={cloneActionLoading}
+                        >
                           {clone.status === "active" ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                         </Button>
                       </div>
@@ -655,7 +705,7 @@ export default function CreatorDashboardPage() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-3xl font-bold text-slate-900 dark:text-white mb-2">
-                    ${monthlyStats.totalEarnings}
+                    ${stats?.totalEarnings?.toFixed(2) || '0.00'}
                   </div>
                   <p className="text-sm text-green-600">+23.5% from last month</p>
                 </CardContent>
@@ -688,7 +738,7 @@ export default function CreatorDashboardPage() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {myClones
+                  {clones
                     .filter((clone) => clone.status === "active")
                     .map((clone) => {
                       const typeConfig = expertTypes[clone.type as keyof typeof expertTypes]
@@ -742,7 +792,7 @@ export default function CreatorDashboardPage() {
                   </div>
                   <div className="text-right">
                     <div className="text-xl font-semibold text-slate-900 dark:text-white">
-                      ${monthlyStats.totalEarnings}
+                      ${stats?.totalEarnings?.toFixed(2) || '0.00'}
                     </div>
                     <p className="text-sm text-slate-600 dark:text-slate-300">Pending</p>
                   </div>

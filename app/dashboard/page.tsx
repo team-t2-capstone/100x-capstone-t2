@@ -16,7 +16,6 @@ import {
   Star,
   CreditCard,
   Heart,
-  User,
   Plus,
   ArrowRight,
   Stethoscope,
@@ -25,7 +24,6 @@ import {
   DollarSign,
   Scale,
   Search,
-  LogOut,
   Mic,
   Video,
 } from "lucide-react"
@@ -229,48 +227,6 @@ function DashboardPageContent() {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
-      {/* Navigation */}
-      <nav className="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-950/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-4 sm:space-x-8">
-              <Link
-                href="/"
-                className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-slate-900 to-slate-600 dark:from-white dark:to-slate-300 bg-clip-text text-transparent"
-              >
-                CloneAI
-              </Link>
-              <div className="hidden md:flex space-x-6">
-                <Link
-                  href="/discover"
-                  className="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors"
-                >
-                  Discover
-                </Link>
-                <Link href="/dashboard" className="text-blue-600 dark:text-blue-400 font-medium">
-                  Dashboard
-                </Link>
-              </div>
-            </div>
-            <div className="flex items-center space-x-2 sm:space-x-4">
-              <Link href="/create-clone">
-                <Button variant="ghost" className="hidden sm:inline-flex">
-                  Become a Creator
-                </Button>
-              </Link>
-              <Link href="/profile">
-                <Button variant="outline" size="sm">
-                  <User className="h-4 w-4 mr-2" />
-                  <span className="hidden sm:inline">Profile</span>
-                </Button>
-              </Link>
-              <Button variant="ghost" size="sm">
-                <LogOut className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        </div>
-      </nav>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
