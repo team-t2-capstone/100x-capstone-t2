@@ -236,15 +236,19 @@ async def logout(
 
 @router.get("/me", response_model=UserProfileSchema)
 async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     current_user_id: str = Depends(get_current_user_id),
     supabase_client: Client = Depends(get_supabase)
 ) -> UserProfileSchema:
     """
-    Get current user profile information from Supabase
+    Get current user profile information from Supabase using JWT token
     """
     try:
-        # Get user from Supabase Auth
-        response = supabase_client.auth.get_user()
+        # Get the JWT token from credentials
+        jwt_token = credentials.credentials
+        
+        # Get user from Supabase Auth using the JWT token
+        response = supabase_client.auth.get_user(jwt_token)
         
         if not response.user:
             raise HTTPException(
@@ -254,13 +258,19 @@ async def get_current_user(
         
         user = response.user
         user_metadata = user.user_metadata or {}
+        app_metadata = user.app_metadata or {}
+        
+        # Get role from either app_metadata or user_metadata, default to 'user'
+        role = app_metadata.get("role") or user_metadata.get("role", "user")
+        
+        logger.info("User profile retrieved successfully", user_id=current_user_id, role=role)
         
         return UserProfileSchema(
             id=str(user.id),
             email=user.email,
             full_name=user_metadata.get("full_name", ""),
             avatar_url=user_metadata.get("avatar_url"),
-            role=user_metadata.get("role", "user"),
+            role=role,
             created_at=user.created_at,
             updated_at=user.updated_at
         )

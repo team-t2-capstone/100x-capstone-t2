@@ -107,7 +107,7 @@ class SecurityManager:
             # First try with internal secret key (for internal tokens)
             try:
                 payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
-            except jwt.InvalidTokenError:
+            except JWTError:
                 # If internal verification fails, try simple decoding for Supabase tokens
                 import base64
                 import json

@@ -35,47 +35,63 @@ class SupabaseAuthManager:
     
     def verify_supabase_jwt(self, token: str) -> Optional[Dict[str, Any]]:
         """
-        Verify Supabase JWT token using Supabase client
-        This is more reliable than manual JWT decoding
+        Verify Supabase JWT token with enhanced error handling and logging
         """
         try:
-            # Try to decode the JWT to get basic info without verification first
-            # This allows us to extract the payload for user info
-            try:
-                import base64
-                import json
-                
-                # Split the token
-                header, payload_b64, signature = token.split('.')
-                
-                # Add padding if needed
-                payload_b64 += '=' * (4 - len(payload_b64) % 4)
-                
-                # Decode payload
-                payload_json = base64.urlsafe_b64decode(payload_b64)
-                payload = json.loads(payload_json)
-                
-                # Basic validation - check if it looks like a Supabase token
-                if not payload.get('sub') or not payload.get('iss'):
-                    logger.warning("Token missing required fields")
-                    return None
-                
-                # Check if token is expired
-                if "exp" in payload:
-                    exp_timestamp = payload["exp"]
-                    if datetime.utcnow().timestamp() > exp_timestamp:
-                        logger.warning("JWT token expired")
-                        return None
-                
-                logger.debug("JWT token decoded successfully", user_id=payload.get('sub'))
-                return payload
-                
-            except Exception as decode_error:
-                logger.warning("Failed to decode JWT payload", error=str(decode_error))
+            logger.debug("Attempting to verify JWT token", token_prefix=token[:20] + "..." if len(token) > 20 else token)
+            
+            import base64
+            import json
+            
+            # Split the token
+            parts = token.split('.')
+            if len(parts) != 3:
+                logger.warning("Invalid JWT token format - expected 3 parts", parts_count=len(parts))
                 return None
                 
+            header, payload_b64, signature = parts
+            
+            # Add padding if needed
+            payload_b64 += '=' * (4 - len(payload_b64) % 4)
+            
+            # Decode payload
+            try:
+                payload_json = base64.urlsafe_b64decode(payload_b64)
+                payload = json.loads(payload_json)
+                logger.debug("JWT payload decoded", payload_keys=list(payload.keys()) if payload else None)
+            except Exception as decode_error:
+                logger.error("Failed to decode JWT payload", error=str(decode_error))
+                return None
+            
+            # Basic validation - check if it has required fields
+            if not payload:
+                logger.warning("Empty JWT payload")
+                return None
+                
+            user_id = payload.get('sub')
+            if not user_id:
+                logger.warning("JWT token missing 'sub' field", payload_keys=list(payload.keys()))
+                return None
+            
+            # Check if token is expired (with some tolerance)
+            if "exp" in payload:
+                exp_timestamp = payload["exp"]
+                current_timestamp = datetime.utcnow().timestamp()
+                
+                # Add 60 second tolerance for clock skew
+                if current_timestamp > (exp_timestamp + 60):
+                    logger.warning("JWT token expired", 
+                                 exp_timestamp=exp_timestamp, 
+                                 current_timestamp=current_timestamp)
+                    return None
+                elif current_timestamp > exp_timestamp:
+                    logger.debug("JWT token near expiry but within tolerance")
+            
+            logger.info("JWT token verified successfully", user_id=user_id)
+            return payload
+                
         except Exception as e:
-            logger.error("JWT verification error", error=str(e))
+            logger.error("JWT verification error", error=str(e), token_prefix=token[:20] + "..." if len(token) > 20 else token)
             return None
     
     async def authenticate_user(
@@ -291,22 +307,41 @@ async def get_current_user_id(
 ) -> str:
     """
     Get current user ID from JWT token
-    Supports both Supabase Auth tokens and internal tokens
+    Supports both Supabase Auth tokens and internal tokens with enhanced logging
     """
+    if not credentials or not credentials.credentials:
+        logger.warning("Authentication failed - no credentials provided")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
     token = credentials.credentials
+    logger.debug("Attempting authentication", token_length=len(token), token_prefix=token[:30] + "...")
+    
+    # Debug: Check if the token looks like a JWT (should have 2 dots)
+    dot_count = token.count('.')
+    logger.debug("Token format check", dot_count=dot_count, expected_dots=2)
     
     # First try to verify as Supabase JWT
     payload = supabase_auth.verify_supabase_jwt(token)
+    auth_method = "supabase_jwt"
     
     # If Supabase JWT fails, try internal JWT (for development/testing)
     if payload is None:
+        logger.debug("Supabase JWT failed, trying internal JWT as fallback")
         try:
             payload = security_manager.verify_token(token)
-        except HTTPException:
-            pass
+            auth_method = "internal_jwt"
+            logger.debug("Internal JWT verification successful")
+        except HTTPException as e:
+            logger.debug("Internal JWT verification failed", error=str(e.detail))
+        except Exception as e:
+            logger.debug("Internal JWT verification error", error=str(e))
     
     if payload is None:
-        logger.warning("Authentication failed - invalid token")
+        logger.warning("Authentication failed - both verification methods failed")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
@@ -315,14 +350,16 @@ async def get_current_user_id(
     
     user_id = payload.get("sub")
     if user_id is None:
-        logger.warning("Authentication failed - missing user ID in token")
+        logger.warning("Authentication failed - missing user ID in token", 
+                      auth_method=auth_method, 
+                      payload_keys=list(payload.keys()) if payload else None)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    logger.debug("User authenticated", user_id=user_id)
+    logger.info("Authentication successful", user_id=user_id, auth_method=auth_method)
     return user_id
 
 

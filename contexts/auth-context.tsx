@@ -7,6 +7,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { authApi, User, LoginRequest, SignupRequest } from '@/lib/auth-api';
 import { storeAuthTokens, clearAuthTokens, getAuthTokens, isAuthenticated } from '@/lib/api-client';
+import { supabase, supabaseAuth } from '@/lib/supabase';
 
 interface AuthContextType {
   // State
@@ -48,13 +49,33 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setError(null);
   }, []);
 
-  // Initialize auth state on mount
+  // Initialize auth state on mount using Supabase session
   const initializeAuth = useCallback(async () => {
     try {
-      if (isAuthenticated()) {
-        // Try to get current user info
-        const userData = await authApi.getCurrentUser();
+      // Get current session from Supabase
+      const session = await supabaseAuth.getSession();
+      
+      if (session && session.user) {
+        // Store tokens from session
+        storeAuthTokens(session.access_token, session.refresh_token);
+        
+        // Set user data from Supabase user
+        const userData: User = {
+          id: session.user.id,
+          email: session.user.email || '',
+          full_name: session.user.user_metadata?.full_name || '',
+          role: session.user.user_metadata?.role || 'user',
+          email_confirmed: !!session.user.email_confirmed_at,
+          created_at: session.user.created_at,
+          subscription_tier: 'free',
+          credits_remaining: 100,
+        };
+        
         setUser(userData);
+      } else {
+        // No active session
+        clearAuthTokens();
+        setUser(null);
       }
     } catch (error) {
       console.error('Auth initialization failed:', error);
@@ -84,19 +105,35 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   }, []);
 
-  // Login function
+  // Login function using Supabase directly
   const login = useCallback(async (credentials: LoginRequest) => {
     try {
       setLoading(true);
       setError(null);
       
-      const authResponse = await authApi.login(credentials);
+      // Use Supabase client to authenticate
+      const { session, user } = await supabaseAuth.signIn(credentials.email, credentials.password);
       
-      // Store tokens
-      storeAuthTokens(authResponse.access_token, authResponse.refresh_token);
+      if (!session || !user) {
+        throw new Error('Authentication failed');
+      }
       
-      // Set user data
-      setUser(authResponse.user);
+      // Store Supabase tokens
+      storeAuthTokens(session.access_token, session.refresh_token);
+      
+      // Set user data from Supabase user
+      const userData: User = {
+        id: user.id,
+        email: user.email || '',
+        full_name: user.user_metadata?.full_name || '',
+        role: user.user_metadata?.role || 'user',
+        email_confirmed: !!user.email_confirmed_at,
+        created_at: user.created_at,
+        subscription_tier: 'free',
+        credits_remaining: 100,
+      };
+      
+      setUser(userData);
       
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Login failed';
@@ -133,13 +170,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   }, []);
 
-  // Logout function
+  // Logout function using Supabase
   const logout = useCallback(async () => {
     try {
       setLoading(true);
       
-      // Call logout API (best effort)
-      await authApi.logout();
+      // Sign out with Supabase
+      await supabaseAuth.signOut();
     } catch (error) {
       console.error('Logout API call failed:', error);
     } finally {

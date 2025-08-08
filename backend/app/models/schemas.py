@@ -96,6 +96,17 @@ class UserUpdate(BaseSchema):
     preferences: Optional[Dict[str, Any]] = None
 
 
+# Pagination schemas
+class PaginationInfo(BaseSchema):
+    """Pagination information"""
+    page: int
+    limit: int
+    total: int
+    pages: int
+    has_next: bool
+    has_prev: bool
+
+
 # Clone schemas
 class CloneCreate(BaseSchema):
     """Clone creation request"""
@@ -131,21 +142,25 @@ class CloneResponse(BaseSchema):
     expertise_areas: List[str]
     avatar_url: Optional[str] = None
     base_price: float
-    rating: float
+    bio: Optional[str] = None
+    personality_traits: Optional[Dict[str, Any]] = None
+    communication_style: Optional[Dict[str, Any]] = None
+    languages: List[str] = Field(default_factory=lambda: ["English"])
+    average_rating: float
     total_sessions: int
+    total_earnings: float
     is_published: bool
+    is_active: bool
     creator_id: str
     created_at: datetime
     updated_at: datetime
+    published_at: Optional[datetime] = None
 
 
 class CloneListResponse(BaseSchema):
     """Clone list response with pagination"""
     clones: List[CloneResponse]
-    total: int
-    page: int
-    limit: int
-    pages: int
+    pagination: PaginationInfo
 
 
 # Document schemas
@@ -332,17 +347,6 @@ class DetailedHealthCheckResponse(BaseSchema):
     timestamp: datetime
     version: str
     services: Dict[str, Dict[str, Any]]
-
-
-# Pagination schemas
-class PaginationInfo(BaseSchema):
-    """Pagination information"""
-    page: int
-    limit: int
-    total: int
-    pages: int
-    has_next: bool
-    has_prev: bool
 
 
 # File upload schemas
