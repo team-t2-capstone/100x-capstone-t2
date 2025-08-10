@@ -27,27 +27,46 @@ export function useUserDashboard(userId: string, days: number = 30) {
       setLoading(true);
       setError(null);
       
-      const [analyticsData, sessionsData, favoritesData] = await Promise.allSettled([
-        dashboardApi.getUserAnalytics(userId, days),
-        dashboardApi.getUserSessions(userId, 1, 5),
-        dashboardApi.getUserFavorites(userId)
+      // Get user analytics from Supabase
+      const { supabase } = await import('@/lib/supabase');
+      
+      const [userProfileData, sessionsData, clonesData] = await Promise.allSettled([
+        supabase.from('user_profiles').select('*').eq('id', userId).single(),
+        supabase.from('sessions').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(5),
+        supabase.from('clones').select('*').eq('creator_id', userId).limit(5)
       ]);
 
-      if (analyticsData.status === 'fulfilled') {
-        setAnalytics(analyticsData.value);
+      // Process user profile data for analytics
+      if (userProfileData.status === 'fulfilled' && userProfileData.value.data) {
+        const profile = userProfileData.value.data;
+        const mockAnalytics: UserAnalytics = {
+          user_id: userId,
+          total_sessions: 0,
+          total_duration_minutes: 0,
+          total_messages_sent: 0,
+          total_spent: profile.total_spent || 0,
+          average_session_duration: 0,
+          favorite_categories: [],
+          most_used_clones: [],
+          engagement_score: 0,
+          activity_streak_days: 0,
+          weekly_activity: [],
+          monthly_trends: { sessions: [], duration: [], spent: [] }
+        };
+        setAnalytics(mockAnalytics);
       }
       
-      if (sessionsData.status === 'fulfilled') {
-        setSessions(sessionsData.value?.sessions || []);
+      if (sessionsData.status === 'fulfilled' && sessionsData.value.data) {
+        setSessions(sessionsData.value.data);
       }
       
-      if (favoritesData.status === 'fulfilled') {
-        setFavorites(favoritesData.value?.favorites || []);
+      if (clonesData.status === 'fulfilled' && clonesData.value.data) {
+        setFavorites(clonesData.value.data);
       }
       
       // If any critical data failed, show error
-      if (analyticsData.status === 'rejected') {
-        setError(analyticsData.reason.message);
+      if (userProfileData.status === 'rejected') {
+        setError(userProfileData.reason.message);
       }
       
     } catch (err) {
@@ -103,27 +122,47 @@ export function useCreatorDashboard(creatorId: string, days: number = 30) {
       setLoading(true);
       setError(null);
       
-      const [analyticsData, clonesData, sessionsData] = await Promise.allSettled([
-        dashboardApi.getCreatorAnalytics(creatorId, days),
-        dashboardApi.getCreatorClones(creatorId, 1, 10),
-        dashboardApi.getCreatorSessions(creatorId, 1, 5)
+      // Get creator data from Supabase
+      const { supabase } = await import('@/lib/supabase');
+      
+      const [creatorData, clonesData, sessionsData] = await Promise.allSettled([
+        supabase.from('user_profiles').select('*').eq('id', creatorId).single(),
+        supabase.from('clones').select('*').eq('creator_id', creatorId).limit(10),
+        supabase.from('sessions').select('*, clones!sessions_clone_id_fkey(name)').eq('user_id', creatorId).order('created_at', { ascending: false }).limit(5)
       ]);
 
-      if (analyticsData.status === 'fulfilled') {
-        setAnalytics(analyticsData.value);
+      // Process creator data for analytics
+      if (creatorData.status === 'fulfilled' && creatorData.value.data) {
+        const profile = creatorData.value.data;
+        const mockAnalytics: CreatorAnalytics = {
+          total_earnings: profile.total_spent || 0,
+          total_sessions: 0,
+          average_rating: 0,
+          user_retention_rate: 0,
+          popular_topics: [],
+          monthly_trends: { earnings: [], sessions: [], ratings: [] }
+        };
+        setAnalytics(mockAnalytics);
       }
       
-      if (clonesData.status === 'fulfilled') {
-        setClones(clonesData.value?.clones || []);
+      if (clonesData.status === 'fulfilled' && clonesData.value.data) {
+        // Map Supabase data to expected format
+        const mappedClones = clonesData.value.data.map(clone => ({
+          ...clone,
+          avatar: clone.avatar_url, // Map avatar_url to avatar for backward compatibility
+          type: clone.category, // Map category to type for the UI
+          status: clone.is_active ? 'active' : 'draft' // Map is_active to status
+        }));
+        setClones(mappedClones);
       }
       
-      if (sessionsData.status === 'fulfilled') {
-        setSessions(sessionsData.value?.sessions || []);
+      if (sessionsData.status === 'fulfilled' && sessionsData.value.data) {
+        setSessions(sessionsData.value.data);
       }
       
       // If any critical data failed, show error
-      if (analyticsData.status === 'rejected') {
-        setError(analyticsData.reason.message);
+      if (creatorData.status === 'rejected') {
+        setError(creatorData.reason.message);
       }
       
     } catch (err) {
@@ -254,44 +293,78 @@ export function useUserProfile(userId: string) {
   const [error, setError] = useState<string | null>(null);
   const [updating, setUpdating] = useState(false);
 
+  const createUserProfile = useCallback(async (userId: string) => {
+    try {
+      // Get user data from Supabase auth to populate profile
+      const { supabase, supabaseAuth } = await import('@/lib/supabase');
+      const user = await supabaseAuth.getUser();
+      
+      if (!user) throw new Error('No authenticated user found');
+      
+      const profileData = {
+        id: userId,
+        email: user.email || '',
+        full_name: user.user_metadata?.full_name || 'User',
+        role: user.user_metadata?.role || 'user',
+        is_active: true,
+        is_verified: !!user.email_confirmed_at,
+        hashed_password: '', // This should be handled by auth system
+        preferences: {},
+        timezone: 'UTC',
+        language: 'en',
+        subscription_tier: 'free',
+        credits_remaining: 100,
+        total_spent: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      
+      const { error } = await supabase
+        .from('user_profiles')
+        .insert([profileData]);
+        
+      if (error) throw error;
+      console.log('User profile created successfully');
+    } catch (error) {
+      console.error('Error creating user profile:', error);
+      throw error;
+    }
+  }, []);
+
   const fetchProfile = useCallback(async () => {
     if (!userId) {
       setLoading(false);
       return;
     }
-    
     try {
       setLoading(true);
       setError(null);
-      
-      // Since we're using Supabase auth directly, create a basic profile from auth context
-      // For now, we'll create a mock profile that matches the expected structure
-      const mockProfile = {
-        id: userId,
-        firstName: "John",
-        lastName: "Doe", 
-        email: "user@example.com",
-        phone: "",
-        location: "",
-        bio: "Welcome to CloneAI! Update your profile to get started.",
-        dateOfBirth: "",
-        timezone: "America/Los_Angeles",
-        avatar: "/placeholder.svg?height=120&width=120",
-        preferences: {
-          emailNotifications: true,
-          pushNotifications: true,
-          sessionReminders: true,
-          marketingEmails: false,
-          weeklyDigest: true,
-          darkMode: false,
-          language: "en",
-          currency: "USD"
+      // Fetch profile from Supabase 'user_profiles' table
+      const { data, error } = await import('@/lib/supabase').then(({ supabase }) =>
+        supabase.from('user_profiles').select('*').eq('id', userId).single()
+      );
+      if (error) {
+        // If user profile doesn't exist, create one
+        if (error.code === 'PGRST116') {
+          console.log('User profile not found, creating one...');
+          await createUserProfile(userId);
+          // Retry fetching after creation
+          const { data: newData, error: newError } = await import('@/lib/supabase').then(({ supabase }) =>
+            supabase.from('user_profiles').select('*').eq('id', userId).single()
+          );
+          if (newError) throw newError;
+          setProfile(newData);
+        } else {
+          throw error;
         }
-      };
-      
-      setProfile(mockProfile);
-      
+      } else if (data) {
+        setProfile(data);
+      } else {
+        setProfile(null);
+      }
     } catch (err) {
+      console.error('Profile fetch error:', err);
+      console.error('User ID:', userId);
       setError(err instanceof Error ? err.message : 'Failed to load user profile');
     } finally {
       setLoading(false);
@@ -302,22 +375,21 @@ export function useUserProfile(userId: string) {
     try {
       setUpdating(true);
       setError(null);
-      
-      // For now, just update local state (in a real app, this would save to Supabase)
-      setProfile(prev => ({ ...prev, ...profileData }));
-      
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
+      // Update profile in Supabase 'user_profiles' table
+      const { error } = await import('@/lib/supabase').then(({ supabase }) =>
+        supabase.from('user_profiles').update(profileData).eq('id', userId)
+      );
+      if (error) throw error;
+      // Refresh profile after update
+      await fetchProfile();
       return true;
-      
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update profile');
       return false;
     } finally {
       setUpdating(false);
     }
-  }, []);
+  }, [userId, fetchProfile]);
 
   const updatePreferences = useCallback(async (preferences: any) => {
     try {
@@ -375,26 +447,43 @@ export function useBilling(userId: string) {
       setLoading(true);
       setError(null);
       
-      // Create mock billing data that works with our Supabase setup
-      const mockBillingInfo = {
-        currentPlan: 'Premium',
+      // Get user profile for billing info
+      const { supabase } = await import('@/lib/supabase');
+      const { data: userProfile, error: userError } = await supabase
+        .from('user_profiles')
+        .select('total_spent, subscription_tier, credits_remaining')
+        .eq('id', userId)
+        .single();
+      
+      if (userError) throw userError;
+      
+      // Get recent sessions for billing history
+      const { data: sessions, error: sessionError } = await supabase
+        .from('sessions')
+        .select('id, total_cost, created_at, rate_per_minute, duration_minutes')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(10);
+      
+      if (sessionError) throw sessionError;
+      
+      const billingInfo = {
+        currentPlan: userProfile?.subscription_tier || 'free',
         billingCycle: 'monthly',
-        nextBillingDate: '2025-02-01',
-        paymentMethod: 'Visa ending in 4242'
+        nextBillingDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        paymentMethod: 'Not configured'
       };
       
-      const mockHistory = [
-        {
-          id: 'txn_001',
-          amount: 29.99,
-          date: '2025-01-01',
-          description: 'Monthly Premium Subscription',
-          status: 'completed'
-        }
-      ];
+      const billingHistory = (sessions || []).map((session: any) => ({
+        id: session.id,
+        amount: session.total_cost || 0,
+        date: session.created_at,
+        description: `Session (${session.duration_minutes || 0} minutes)`,
+        status: 'completed'
+      }));
       
-      setBillingInfo(mockBillingInfo);
-      setBillingHistory(mockHistory);
+      setBillingInfo(billingInfo);
+      setBillingHistory(billingHistory);
       
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load billing data');
@@ -448,8 +537,16 @@ export function useFavorites(userId: string) {
       setLoading(true);
       setError(null);
       
-      const data = await dashboardApi.getUserFavorites(userId);
-      setFavorites(data.favorites || []);
+      // For now, we'll use clones as favorites since we don't have a favorites table
+      const { supabase } = await import('@/lib/supabase');
+      const { data, error } = await supabase
+        .from('clones')
+        .select('*')
+        .eq('creator_id', userId)
+        .limit(10);
+      
+      if (error) throw error;
+      setFavorites(data || []);
       
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load favorites');
@@ -462,7 +559,9 @@ export function useFavorites(userId: string) {
     try {
       setError(null);
       
-      await dashboardApi.addToFavorites(userId, cloneId);
+      // Since we don't have a favorites table, this is a placeholder
+      // In a real implementation, you'd create a user_favorites table
+      console.log(`Adding clone ${cloneId} to favorites for user ${userId}`);
       await fetchFavorites(); // Refresh list
       return true;
       
@@ -476,7 +575,9 @@ export function useFavorites(userId: string) {
     try {
       setError(null);
       
-      await dashboardApi.removeFromFavorites(userId, cloneId);
+      // Since we don't have a favorites table, this is a placeholder
+      // In a real implementation, you'd delete from user_favorites table
+      console.log(`Removing clone ${cloneId} from favorites for user ${userId}`);
       setFavorites(prev => prev.filter(fav => fav.id !== cloneId));
       return true;
       

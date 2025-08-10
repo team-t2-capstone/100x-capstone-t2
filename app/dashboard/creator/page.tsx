@@ -28,6 +28,7 @@ import {
   Loader2,
   AlertCircle,
   RefreshCw,
+  Trash2,
 } from "lucide-react"
 import Link from "next/link"
 import { motion } from "framer-motion"
@@ -39,95 +40,44 @@ const expertTypes = {
   finance: { color: "bg-amber-500", icon: Users, name: "Finance & Investment" },
   coaching: { color: "bg-orange-500", icon: Users, name: "Life & Coaching" },
   legal: { color: "bg-indigo-900", icon: Users, name: "Legal & Consulting" },
+  ai: { color: "bg-cyan-600", icon: Users, name: "AI" },
+  other: { color: "bg-slate-600", icon: Users, name: "Other" },
 }
 
-const myClones = [
-  {
-    id: 1,
-    name: "Dr. Sarah Chen Clone",
-    type: "coaching",
-    status: "active",
-    avatar: "/placeholder.svg?height=60&width=60",
-    sessions: 1247,
-    rating: 4.9,
-    earnings: 15687.5,
-    lastSession: "2 hours ago",
-    createdAt: "2024-01-15",
-    pricing: { text: 25, voice: 50, video: 75 },
-  },
-  {
-    id: 2,
-    name: "Business Strategy Clone",
-    type: "business",
-    status: "active",
-    avatar: "/placeholder.svg?height=60&width=60",
-    sessions: 892,
-    rating: 4.8,
-    earnings: 22340.0,
-    lastSession: "1 day ago",
-    createdAt: "2024-02-01",
-    pricing: { text: 75, voice: 125, video: 150 },
-  },
-  {
-    id: 3,
-    name: "Draft Clone",
-    type: "education",
-    status: "draft",
-    avatar: "/placeholder.svg?height=60&width=60",
-    sessions: 0,
-    rating: 0,
-    earnings: 0,
-    lastSession: "Never",
-    createdAt: "2024-12-01",
-    pricing: { text: 35, voice: 65, video: 85 },
-  },
-]
+// Mock data removed - now using real Supabase data from hooks
 
-const recentSessions = [
-  {
-    id: 1,
-    cloneName: "Dr. Sarah Chen Clone",
-    userName: "Alex Johnson",
-    userAvatar: "/placeholder.svg?height=40&width=40",
-    sessionType: "Text Chat",
-    duration: "45 min",
-    earnings: 37.5,
-    rating: 5,
-    date: "2 hours ago",
-    feedback: "Incredibly helpful session! The advice was spot-on and actionable.",
-  },
-  {
-    id: 2,
-    cloneName: "Business Strategy Clone",
-    userName: "Maria Garcia",
-    userAvatar: "/placeholder.svg?height=40&width=40",
-    sessionType: "Voice Call",
-    duration: "60 min",
-    earnings: 125.0,
-    rating: 5,
-    date: "1 day ago",
-    feedback: "Excellent strategic insights that I can implement immediately.",
-  },
-  {
-    id: 3,
-    cloneName: "Dr. Sarah Chen Clone",
-    userName: "David Kim",
-    userAvatar: "/placeholder.svg?height=40&width=40",
-    sessionType: "Video Call",
-    duration: "30 min",
-    earnings: 75.0,
-    rating: 4,
-    date: "2 days ago",
-    feedback: "Great session, very personalized approach to my situation.",
-  },
-]
-
-const monthlyStats = {
-  totalEarnings: 3847.5,
-  totalSessions: 47,
-  averageRating: 4.85,
-  activeClones: 2,
-  growthRate: 23.5,
+// Function to calculate clone completion percentage  
+const calculateCloneCompletion = (clone: any): number => {
+  let completedSteps = 0
+  const totalSteps = 4 // Only count essential steps
+  
+  // Step 1: Basic Information (25%)
+  if (clone.name && clone.professional_title && clone.category && clone.bio) {
+    // Also check credentials if provided
+    if (clone.credentials_qualifications || clone.expertise_areas?.length > 0) {
+      completedSteps++
+    }
+  }
+  
+  // Step 2: Q&A Training (25%) 
+  // This should only be marked complete if actual Q&A responses exist
+  // For now, we'll be strict and not count this unless published
+  if (clone.is_published) {
+    completedSteps++ // Only count if published (means Q&A was done)
+  }
+  
+  // Step 3: Personality & Style (25%)
+  if (clone.personality_traits && Object.keys(clone.personality_traits).length > 0 &&
+      clone.communication_style && Object.keys(clone.communication_style).length > 0) {
+    completedSteps++
+  }
+  
+  // Step 4: Pricing & Launch (25%)  
+  if (clone.base_price && clone.base_price > 0 && clone.is_published) {
+    completedSteps++
+  }
+  
+  return Math.round((completedSteps / totalSteps) * 100)
 }
 
 export default function CreatorDashboardPage() {
@@ -317,7 +267,7 @@ export default function CreatorDashboardPage() {
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {clones.slice(0, 3).map((clone, index) => {
-                    const typeConfig = expertTypes[clone.type as keyof typeof expertTypes]
+                    const typeConfig = expertTypes[clone.type as keyof typeof expertTypes] || expertTypes.other
                     return (
                       <motion.div
                         key={clone.id}
@@ -330,7 +280,7 @@ export default function CreatorDashboardPage() {
                             <div className="flex items-center space-x-4 mb-4">
                               <div className="relative">
                                 <Avatar className="h-12 w-12">
-                                  <AvatarImage src={clone.avatar || "/placeholder.svg"} alt={clone.name} />
+                                  <AvatarImage src={clone.avatar_url || "/placeholder.svg"} alt={clone.name} />
                                   <AvatarFallback>
                                     {clone.name
                                       .split(" ")
@@ -355,6 +305,11 @@ export default function CreatorDashboardPage() {
                                   >
                                     {clone.status}
                                   </Badge>
+                                  {calculateCloneCompletion(clone) < 100 && (
+                                    <Badge variant="outline" className="text-xs">
+                                      {calculateCloneCompletion(clone)}% Complete
+                                    </Badge>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -362,35 +317,45 @@ export default function CreatorDashboardPage() {
                             <div className="space-y-2 text-sm">
                               <div className="flex justify-between">
                                 <span className="text-slate-600 dark:text-slate-300">Sessions:</span>
-                                <span className="font-medium">{clone.sessions}</span>
+                                <span className="font-medium">{clone.total_sessions || 0}</span>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-slate-600 dark:text-slate-300">Rating:</span>
                                 <div className="flex items-center space-x-1">
                                   <Star className="h-3 w-3 text-yellow-500 fill-current" />
-                                  <span className="font-medium">{clone.rating}</span>
+                                  <span className="font-medium">{clone.average_rating || 0}</span>
                                 </div>
                               </div>
                               <div className="flex justify-between">
                                 <span className="text-slate-600 dark:text-slate-300">Earnings:</span>
-                                <span className="font-medium">${clone.earnings}</span>
+                                <span className="font-medium">${clone.total_earnings || '0.00'}</span>
                               </div>
                             </div>
 
                             <div className="flex space-x-2 mt-4">
-                              <Link href={`/clone/${clone.id}`} className="flex-1">
-                                <Button variant="outline" size="sm" className="w-full bg-transparent">
-                                  <Eye className="h-4 w-4 mr-2" />
-                                  View
-                                </Button>
-                              </Link>
+                              {calculateCloneCompletion(clone) < 100 ? (
+                                <Link href={`/create-clone/wizard?clone_id=${clone.id}`} className="flex-1">
+                                  <Button variant="default" size="sm" className="w-full">
+                                    <Edit className="h-4 w-4 mr-2" />
+                                    Continue Setup
+                                  </Button>
+                                </Link>
+                              ) : (
+                                <Link href={`/clone/${clone.id}`} className="flex-1">
+                                  <Button variant="outline" size="sm" className="w-full bg-transparent">
+                                    <Eye className="h-4 w-4 mr-2" />
+                                    View
+                                  </Button>
+                                </Link>
+                              )}
                               <Button 
                                 variant="outline" 
                                 size="sm" 
-                                className="bg-transparent"
-                                onClick={() => window.location.href = `/create-clone/wizard?edit=${clone.id}`}
+                                className="bg-transparent text-red-600 hover:text-red-700"
+                                onClick={() => handleDeleteClone(clone.id)}
+                                disabled={cloneActionLoading}
                               >
-                                <Edit className="h-4 w-4" />
+                                <Trash2 className="h-4 w-4" />
                               </Button>
                             </div>
                           </CardContent>
@@ -476,7 +441,7 @@ export default function CreatorDashboardPage() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {clones.map((clone) => {
-                const typeConfig = expertTypes[clone.type as keyof typeof expertTypes]
+                const typeConfig = expertTypes[clone.type as keyof typeof expertTypes] || expertTypes.other
                 return (
                   <Card key={clone.id} className="hover:shadow-lg transition-all duration-300">
                     <CardContent className="p-6">
@@ -484,7 +449,7 @@ export default function CreatorDashboardPage() {
                         <div className="flex items-center space-x-3">
                           <div className="relative">
                             <Avatar className="h-12 w-12">
-                              <AvatarImage src={clone.avatar || "/placeholder.svg"} alt={clone.name} />
+                              <AvatarImage src={clone.avatar_url || "/placeholder.svg"} alt={clone.name} />
                               <AvatarFallback>
                                 {clone.name
                                   .split(" ")
@@ -508,6 +473,11 @@ export default function CreatorDashboardPage() {
                             >
                               {clone.status}
                             </Badge>
+                            {calculateCloneCompletion(clone) < 100 && (
+                              <Badge variant="outline" className="text-xs">
+                                {calculateCloneCompletion(clone)}% Setup
+                              </Badge>
+                            )}
                           </div>
                         </div>
                         <Button variant="ghost" size="sm">
@@ -518,22 +488,31 @@ export default function CreatorDashboardPage() {
                       <div className="space-y-3 mb-4">
                         <div className="flex justify-between text-sm">
                           <span className="text-slate-600 dark:text-slate-300">Total Sessions:</span>
-                          <span className="font-medium">{clone.sessions}</span>
+                          <span className="font-medium">{clone.total_sessions || 0}</span>
                         </div>
                         <div className="flex justify-between text-sm">
                           <span className="text-slate-600 dark:text-slate-300">Rating:</span>
                           <div className="flex items-center space-x-1">
                             <Star className="h-3 w-3 text-yellow-500 fill-current" />
-                            <span className="font-medium">{clone.rating}</span>
+                            <span className="font-medium">{clone.average_rating || 0}</span>
                           </div>
                         </div>
                         <div className="flex justify-between text-sm">
                           <span className="text-slate-600 dark:text-slate-300">Total Earnings:</span>
-                          <span className="font-medium text-green-600">${clone.earnings}</span>
+                          <span className="font-medium text-green-600">${clone.total_earnings || '0.00'}</span>
                         </div>
+                        {calculateCloneCompletion(clone) < 100 && (
+                          <div className="space-y-1">
+                            <div className="flex justify-between text-sm">
+                              <span className="text-slate-600 dark:text-slate-300">Setup Progress:</span>
+                              <span className="font-medium">{calculateCloneCompletion(clone)}%</span>
+                            </div>
+                            <Progress value={calculateCloneCompletion(clone)} className="h-2" />
+                          </div>
+                        )}
                         <div className="flex justify-between text-sm">
                           <span className="text-slate-600 dark:text-slate-300">Last Session:</span>
-                          <span className="font-medium">{clone.lastSession}</span>
+                          <span className="font-medium">{clone.updated_at ? new Date(clone.updated_at).toLocaleDateString() : 'Never'}</span>
                         </div>
                       </div>
 
@@ -544,15 +523,15 @@ export default function CreatorDashboardPage() {
                         <div className="flex items-center justify-between text-xs">
                           <div className="flex items-center space-x-1">
                             <MessageCircle className="h-3 w-3" />
-                            <span>${clone.pricing.text}</span>
+                            <span>${clone.base_price || 25}</span>
                           </div>
                           <div className="flex items-center space-x-1">
                             <Mic className="h-3 w-3" />
-                            <span>${clone.pricing.voice}</span>
+                            <span>${Math.floor((clone.base_price || 25) * 1.5)}</span>
                           </div>
                           <div className="flex items-center space-x-1">
                             <Video className="h-3 w-3" />
-                            <span>${clone.pricing.video}</span>
+                            <span>${Math.floor((clone.base_price || 25) * 2)}</span>
                           </div>
                         </div>
                       </div>
@@ -581,6 +560,15 @@ export default function CreatorDashboardPage() {
                         >
                           {clone.status === "active" ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                         </Button>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="bg-transparent text-red-600 hover:text-red-700"
+                          onClick={() => handleDeleteClone(clone.id)}
+                          disabled={cloneActionLoading}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       </div>
                     </CardContent>
                   </Card>
@@ -602,33 +590,33 @@ export default function CreatorDashboardPage() {
                   <div className="space-y-3">
                     <div className="flex justify-between items-center">
                       <span className="text-sm">Session Completion Rate</span>
-                      <span className="text-sm font-medium">94%</span>
+                      <span className="text-sm font-medium">{analytics?.sessionMetrics?.completionRate?.toFixed(0) || '0'}%</span>
                     </div>
-                    <Progress value={94} />
+                    <Progress value={analytics?.sessionMetrics?.completionRate || 0} />
                   </div>
 
                   <div className="space-y-3">
                     <div className="flex justify-between items-center">
                       <span className="text-sm">User Satisfaction</span>
-                      <span className="text-sm font-medium">4.85/5.0</span>
+                      <span className="text-sm font-medium">{stats?.averageRating?.toFixed(2) || '0.0'}/5.0</span>
                     </div>
-                    <Progress value={97} />
+                    <Progress value={(stats?.averageRating || 0) * 20} />
                   </div>
 
                   <div className="space-y-3">
                     <div className="flex justify-between items-center">
                       <span className="text-sm">Response Accuracy</span>
-                      <span className="text-sm font-medium">91%</span>
+                      <span className="text-sm font-medium">{analytics?.sessionMetrics?.responseAccuracy?.toFixed(0) || '0'}%</span>
                     </div>
-                    <Progress value={91} />
+                    <Progress value={analytics?.sessionMetrics?.responseAccuracy || 0} />
                   </div>
 
                   <div className="space-y-3">
                     <div className="flex justify-between items-center">
                       <span className="text-sm">Repeat Users</span>
-                      <span className="text-sm font-medium">67%</span>
+                      <span className="text-sm font-medium">{stats?.retentionRate?.toFixed(0) || '0'}%</span>
                     </div>
-                    <Progress value={67} />
+                    <Progress value={stats?.retentionRate || 0} />
                   </div>
                 </CardContent>
               </Card>
@@ -644,9 +632,9 @@ export default function CreatorDashboardPage() {
                         <MessageCircle className="h-4 w-4 text-blue-500" />
                         <span className="text-sm">Text Chat</span>
                       </div>
-                      <span className="text-sm font-medium">65%</span>
+                      <span className="text-sm font-medium">{analytics?.sessionTypes?.textChat?.toFixed(0) || '0'}%</span>
                     </div>
-                    <Progress value={65} />
+                    <Progress value={analytics?.sessionTypes?.textChat || 0} />
                   </div>
 
                   <div className="space-y-3">
@@ -655,9 +643,9 @@ export default function CreatorDashboardPage() {
                         <Mic className="h-4 w-4 text-green-500" />
                         <span className="text-sm">Voice Call</span>
                       </div>
-                      <span className="text-sm font-medium">25%</span>
+                      <span className="text-sm font-medium">{analytics?.sessionTypes?.voiceCall?.toFixed(0) || '0'}%</span>
                     </div>
-                    <Progress value={25} />
+                    <Progress value={analytics?.sessionTypes?.voiceCall || 0} />
                   </div>
 
                   <div className="space-y-3">
@@ -666,9 +654,9 @@ export default function CreatorDashboardPage() {
                         <Video className="h-4 w-4 text-purple-500" />
                         <span className="text-sm">Video Call</span>
                       </div>
-                      <span className="text-sm font-medium">10%</span>
+                      <span className="text-sm font-medium">{analytics?.sessionTypes?.videoCall?.toFixed(0) || '0'}%</span>
                     </div>
-                    <Progress value={10} />
+                    <Progress value={analytics?.sessionTypes?.videoCall || 0} />
                   </div>
                 </CardContent>
               </Card>
@@ -681,15 +669,15 @@ export default function CreatorDashboardPage() {
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div className="text-center">
-                    <div className="text-2xl font-bold text-slate-900 dark:text-white">+23.5%</div>
+                    <div className="text-2xl font-bold text-slate-900 dark:text-white">+{stats?.monthlyTrends?.sessionsGrowth?.toFixed(1) || '0.0'}%</div>
                     <p className="text-sm text-slate-600 dark:text-slate-300">Sessions Growth</p>
                   </div>
                   <div className="text-center">
-                    <div className="text-2xl font-bold text-slate-900 dark:text-white">+18.2%</div>
+                    <div className="text-2xl font-bold text-slate-900 dark:text-white">+{stats?.monthlyTrends?.revenueGrowth?.toFixed(1) || '0.0'}%</div>
                     <p className="text-sm text-slate-600 dark:text-slate-300">Revenue Growth</p>
                   </div>
                   <div className="text-center">
-                    <div className="text-2xl font-bold text-slate-900 dark:text-white">+0.15</div>
+                    <div className="text-2xl font-bold text-slate-900 dark:text-white">+{stats?.monthlyTrends?.ratingImprovement?.toFixed(2) || '0.00'}</div>
                     <p className="text-sm text-slate-600 dark:text-slate-300">Rating Improvement</p>
                   </div>
                 </div>
@@ -707,7 +695,7 @@ export default function CreatorDashboardPage() {
                   <div className="text-3xl font-bold text-slate-900 dark:text-white mb-2">
                     ${stats?.totalEarnings?.toFixed(2) || '0.00'}
                   </div>
-                  <p className="text-sm text-green-600">+23.5% from last month</p>
+                  <p className="text-sm text-green-600">+{stats?.growthRate?.toFixed(1) || '0.0'}% from last month</p>
                 </CardContent>
               </Card>
 
@@ -716,7 +704,7 @@ export default function CreatorDashboardPage() {
                   <CardTitle>Total Lifetime</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="text-3xl font-bold text-slate-900 dark:text-white mb-2">$38,027.50</div>
+                  <div className="text-3xl font-bold text-slate-900 dark:text-white mb-2">${analytics?.lifetimeEarnings?.toFixed(2) || '0.00'}</div>
                   <p className="text-sm text-slate-600 dark:text-slate-300">Since January 2024</p>
                 </CardContent>
               </Card>
@@ -726,7 +714,7 @@ export default function CreatorDashboardPage() {
                   <CardTitle>Avg per Session</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="text-3xl font-bold text-slate-900 dark:text-white mb-2">$81.86</div>
+                  <div className="text-3xl font-bold text-slate-900 dark:text-white mb-2">${stats?.totalEarnings && stats?.totalSessions ? (stats.totalEarnings / stats.totalSessions).toFixed(2) : '0.00'}</div>
                   <p className="text-sm text-slate-600 dark:text-slate-300">Across all session types</p>
                 </CardContent>
               </Card>
@@ -741,7 +729,7 @@ export default function CreatorDashboardPage() {
                   {clones
                     .filter((clone) => clone.status === "active")
                     .map((clone) => {
-                      const typeConfig = expertTypes[clone.type as keyof typeof expertTypes]
+                      const typeConfig = expertTypes[clone.type as keyof typeof expertTypes] || expertTypes.other
                       return (
                         <div
                           key={clone.id}
@@ -750,7 +738,7 @@ export default function CreatorDashboardPage() {
                           <div className="flex items-center space-x-4">
                             <div className="relative">
                               <Avatar className="h-10 w-10">
-                                <AvatarImage src={clone.avatar || "/placeholder.svg"} alt={clone.name} />
+                                <AvatarImage src={clone.avatar_url || "/placeholder.svg"} alt={clone.name} />
                                 <AvatarFallback>
                                   {clone.name
                                     .split(" ")
@@ -764,12 +752,12 @@ export default function CreatorDashboardPage() {
                             </div>
                             <div>
                               <h3 className="font-medium text-slate-900 dark:text-white">{clone.name}</h3>
-                              <p className="text-sm text-slate-600 dark:text-slate-300">{clone.sessions} sessions</p>
+                              <p className="text-sm text-slate-600 dark:text-slate-300">{clone.total_sessions || 0} sessions</p>
                             </div>
                           </div>
                           <div className="text-right">
                             <div className="text-lg font-semibold text-slate-900 dark:text-white">
-                              ${clone.earnings}
+                              ${clone.total_earnings || '0.00'}
                             </div>
                             <p className="text-sm text-slate-600 dark:text-slate-300">Total earned</p>
                           </div>

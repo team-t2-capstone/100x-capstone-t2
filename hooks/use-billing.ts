@@ -52,84 +52,6 @@ export interface BillingData {
   }>;
 }
 
-// Mock billing data - in production this would come from Stripe/payment processor
-const mockBillingData: BillingData = {
-  totalSpent: 1247.50,
-  currentBalance: -12.50, // Negative means amount owed
-  subscription: {
-    id: 'sub_1234567890',
-    plan: 'Premium Plan',
-    status: 'active',
-    currentPeriodStart: '2024-12-01T00:00:00Z',
-    currentPeriodEnd: '2025-01-01T00:00:00Z',
-    amount: 29.99,
-    currency: 'USD',
-    interval: 'month',
-    cancelAtPeriodEnd: false,
-  },
-  paymentMethods: [
-    {
-      id: 'pm_1234567890',
-      type: 'card',
-      last4: '4242',
-      brand: 'visa',
-      expiryMonth: 12,
-      expiryYear: 2025,
-      isPrimary: true,
-      isDefault: true,
-    },
-    {
-      id: 'pm_0987654321',
-      type: 'card',
-      last4: '1234',
-      brand: 'mastercard',
-      expiryMonth: 8,
-      expiryYear: 2026,
-      isPrimary: false,
-      isDefault: false,
-    },
-  ],
-  recentTransactions: [
-    {
-      id: 'txn_001',
-      amount: 487.50,
-      currency: 'USD',
-      description: 'December 2024 - Sessions and subscriptions',
-      status: 'completed',
-      createdAt: '2024-12-01T00:00:00Z',
-      paymentMethod: 'Visa ending in 4242',
-      invoiceUrl: '/billing/invoice/txn_001',
-    },
-    {
-      id: 'txn_002',
-      amount: 325.00,
-      currency: 'USD',
-      description: 'November 2024 - Sessions and subscriptions',
-      status: 'completed',
-      createdAt: '2024-11-01T00:00:00Z',
-      paymentMethod: 'Visa ending in 4242',
-      invoiceUrl: '/billing/invoice/txn_002',
-    },
-    {
-      id: 'txn_003',
-      amount: 412.75,
-      currency: 'USD',
-      description: 'October 2024 - Sessions and subscriptions',
-      status: 'completed',
-      createdAt: '2024-10-01T00:00:00Z',
-      paymentMethod: 'Visa ending in 4242',
-      invoiceUrl: '/billing/invoice/txn_003',
-    },
-  ],
-  upcomingPayments: [
-    {
-      amount: 29.99,
-      date: '2025-01-01',
-      description: 'Premium Plan Subscription',
-    },
-  ],
-};
-
 export function useAdvancedBilling(userId: string) {
   const [billingData, setBillingData] = useState<BillingData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -145,16 +67,55 @@ export function useAdvancedBilling(userId: string) {
 
   const fetchBillingData = useCallback(async () => {
     if (!userId) return;
-    
     try {
       setLoading(true);
       setError(null);
-      
-      // In production, this would be real API calls
-      // For now, simulate API delay and return mock data
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      setBillingData(mockBillingData);
-      
+      // Fetch billing info from Supabase
+      const { supabase } = await import('@/lib/supabase');
+      // Get user profile billing info
+      const { data: userProfile, error: userError } = await supabase
+        .from('user_profiles')
+        .select('total_spent,subscription_tier,credits_remaining,currency')
+        .eq('id', userId)
+        .single();
+      if (userError) throw userError;
+      // Get recent session transactions
+      const { data: sessions, error: sessionError } = await supabase
+        .from('sessions')
+        .select('id,total_cost,rate_per_minute,duration_minutes,created_at,user_rating')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(10);
+      if (sessionError) throw sessionError;
+      // Compose billing data
+      const billingData: BillingData = {
+        totalSpent: userProfile?.total_spent || 0,
+        currentBalance: userProfile?.credits_remaining || 0,
+        subscription: {
+          id: userId,
+          plan: userProfile?.subscription_tier || 'free',
+          status: 'active',
+          currentPeriodStart: '',
+          currentPeriodEnd: '',
+          amount: 0,
+          currency: userProfile?.currency || 'USD',
+          interval: 'month',
+          cancelAtPeriodEnd: false,
+        },
+        paymentMethods: [], // Not tracked in schema
+        recentTransactions: (sessions || []).map((s: any) => ({
+          id: s.id,
+          amount: s.total_cost,
+          currency: userProfile?.currency || 'USD',
+          description: `Session on ${s.created_at}`,
+          status: 'completed',
+          createdAt: s.created_at,
+          paymentMethod: '',
+          invoiceUrl: '',
+        })),
+        upcomingPayments: [], // Not tracked in schema
+      };
+      setBillingData(billingData);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load billing data');
     } finally {

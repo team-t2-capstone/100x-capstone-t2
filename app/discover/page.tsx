@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect } from "react"
-import { listClones, type CloneResponse } from '@/lib/clone-api'
+import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/auth-context'
 import { toast } from '@/components/ui/use-toast'
 import { Button } from "@/components/ui/button"
@@ -26,6 +26,7 @@ import {
   Mic,
   Video,
   Loader2,
+  Cpu,
 } from "lucide-react"
 import Link from "next/link"
 import { motion } from "framer-motion"
@@ -37,141 +38,32 @@ const expertTypes = {
   finance: { color: "bg-amber-500", icon: DollarSign, name: "Finance & Investment" },
   coaching: { color: "bg-orange-500", icon: Heart, name: "Life & Coaching" },
   legal: { color: "bg-indigo-900", icon: Scale, name: "Legal & Consulting" },
+  ai: { color: "bg-cyan-600", icon: Cpu, name: "AI" },
 }
 
-const allExperts = [
-  {
-    id: 1,
-    name: "Dr. Sarah Chen",
-    type: "coaching",
-    specialty: "Life Coach & Therapist",
-    avatar: "/placeholder.svg?height=80&width=80",
-    heroImage: "/placeholder.svg?height=300&width=400&text=Dr.+Sarah+Chen",
-    rating: 4.9,
-    sessions: 1247,
-    priceFrom: 25,
-    priceTo: 75,
-    description:
-      "Transform your mindset and achieve lasting personal growth with evidence-based therapeutic approaches.",
-    credentials: ["PhD Psychology", "Licensed Therapist", "15+ years experience"],
-    availability: "online",
-    featured: true,
-  },
-  {
-    id: 2,
-    name: "Marcus Rodriguez",
-    type: "business",
-    specialty: "Business Strategy Consultant",
-    avatar: "/placeholder.svg?height=80&width=80",
-    heroImage: "/placeholder.svg?height=300&width=400&text=Marcus+Rodriguez",
-    rating: 4.8,
-    sessions: 892,
-    priceFrom: 75,
-    priceTo: 150,
-    description: "Scale your business with proven strategic frameworks used by Fortune 500 companies.",
-    credentials: ["MBA Harvard", "Ex-McKinsey", "20+ years experience"],
-    availability: "online",
-    featured: true,
-  },
-  {
-    id: 3,
-    name: "Prof. Emma Watson",
-    type: "education",
-    specialty: "Data Science Educator",
-    avatar: "/placeholder.svg?height=80&width=80",
-    heroImage: "/placeholder.svg?height=300&width=400&text=Prof.+Emma+Watson",
-    rating: 4.9,
-    sessions: 2156,
-    priceFrom: 35,
-    priceTo: 85,
-    description: "Master data science with personalized learning paths and hands-on projects.",
-    credentials: ["PhD Computer Science", "Stanford Professor", "Published Author"],
-    availability: "online",
-    featured: true,
-  },
-  {
-    id: 4,
-    name: "David Kim",
-    type: "medical",
-    specialty: "Fitness & Nutrition Expert",
-    avatar: "/placeholder.svg?height=80&width=80",
-    rating: 4.7,
-    sessions: 1543,
-    priceFrom: 20,
-    priceTo: 60,
-    description: "Achieve optimal health through science-based fitness and nutrition strategies.",
-    credentials: ["MS Exercise Science", "Certified Nutritionist", "Olympic Trainer"],
-    availability: "online",
-    featured: false,
-  },
-  {
-    id: 5,
-    name: "Lisa Thompson",
-    type: "finance",
-    specialty: "Financial Planning Advisor",
-    avatar: "/placeholder.svg?height=80&width=80",
-    rating: 4.8,
-    sessions: 967,
-    priceFrom: 50,
-    priceTo: 120,
-    description: "Build wealth and secure your financial future with personalized investment strategies.",
-    credentials: ["CFA Charter", "CFP Certified", "12+ years Wall Street"],
-    availability: "online",
-    featured: false,
-  },
-  {
-    id: 6,
-    name: "Dr. Ahmed Hassan",
-    type: "medical",
-    specialty: "Medical AI Assistant",
-    avatar: "/placeholder.svg?height=80&width=80",
-    rating: 4.6,
-    sessions: 2341,
-    priceFrom: 15,
-    priceTo: 45,
-    description:
-      "Get preliminary medical guidance and health information (not a substitute for professional medical advice).",
-    credentials: ["MD Internal Medicine", "Board Certified", "AI Health Specialist"],
-    availability: "online",
-    featured: false,
-  },
-  {
-    id: 7,
-    name: "Jennifer Park",
-    type: "legal",
-    specialty: "Corporate Law Consultant",
-    avatar: "/placeholder.svg?height=80&width=80",
-    rating: 4.9,
-    sessions: 654,
-    priceFrom: 100,
-    priceTo: 200,
-    description: "Navigate complex legal matters with expert guidance on corporate law and compliance.",
-    credentials: ["JD Harvard Law", "Partner at BigLaw", "18+ years experience"],
-    availability: "online",
-    featured: false,
-  },
-  {
-    id: 8,
-    name: "Michael Torres",
-    type: "education",
-    specialty: "Language Learning Expert",
-    avatar: "/placeholder.svg?height=80&width=80",
-    rating: 4.7,
-    sessions: 1876,
-    priceFrom: 25,
-    priceTo: 55,
-    description: "Master new languages with immersive techniques and personalized learning approaches.",
-    credentials: ["MA Linguistics", "Polyglot (8 languages)", "Language Institute Director"],
-    availability: "online",
-    featured: false,
-  },
-]
+// Mock data removed - now using real Supabase data
 
-interface ExpertData extends CloneResponse {
+interface ExpertData {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  base_price: number;
+  avatar_url?: string;
+  total_sessions: number;
+  average_rating: number;
+  expertise_areas?: string[];
+  type: string;
+  specialty: string;
+  sessions: number;
+  rating: number;
+  priceFrom: number;
+  priceTo: number;
+  avatar: string;
   featured?: boolean;
   heroImage?: string;
-  credentials?: string[];
-  availability?: string;
+  credentials: string[];
+  availability: string;
 }
 
 export default function DiscoverPage() {
@@ -186,47 +78,81 @@ export default function DiscoverPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
 
-  // Fetch clones from API
+  // Fetch clones from Supabase
   useEffect(() => {
     const fetchClones = async () => {
       try {
         setLoading(true)
-        const response = await listClones({
-          page: currentPage,
-          limit: 20,
-          category: selectedCategory === 'all' ? undefined : selectedCategory,
-          search: searchQuery || undefined,
-          price_min: priceRange[0],
-          price_max: priceRange[1],
-        })
+        
+        // Build Supabase query
+        let query = supabase
+          .from('clones')
+          .select('*')
+          .eq('is_published', true)
+          .eq('is_active', true)
+
+        // Add category filter
+        if (selectedCategory !== 'all') {
+          query = query.eq('category', selectedCategory)
+        }
+
+        // Add search filter
+        if (searchQuery) {
+          query = query.or(`name.ilike.%${searchQuery}%,description.ilike.%${searchQuery}%`)
+        }
+
+        // Add price range filter
+        query = query
+          .gte('base_price', priceRange[0])
+          .lte('base_price', priceRange[1])
+
+        // Add pagination
+        const from = (currentPage - 1) * 20
+        const to = from + 19
+        query = query.range(from, to)
+
+        const { data: clonesData, error, count } = await query
+
+        if (error) {
+          throw error
+        }
 
         // Transform clone data to match our interface
-        const transformedClones: ExpertData[] = response.clones.map((clone, index) => ({
-          ...clone,
-          // Add mock data for fields not in API response
+        const transformedClones: ExpertData[] = (clonesData || []).map((clone, index) => ({
+          id: clone.id,
+          name: clone.name,
+          description: clone.description,
+          category: clone.category,
+          base_price: clone.base_price,
+          avatar_url: clone.avatar_url,
+          total_sessions: clone.total_sessions || 0,
+          average_rating: clone.average_rating || 0,
+          expertise_areas: clone.expertise_areas || [],
+          // Transform to match ExpertData interface
+          type: clone.category,
+          specialty: clone.description,
+          sessions: clone.total_sessions || 0,
+          rating: clone.average_rating || 0,
+          priceFrom: clone.base_price,
+          priceTo: Math.floor(clone.base_price * 1.5),
+          avatar: clone.avatar_url || `/placeholder.svg?height=80&width=80`,
           featured: index < 3, // Make first 3 featured
           heroImage: `/placeholder.svg?height=300&width=400&text=${encodeURIComponent(clone.name)}`,
           credentials: clone.expertise_areas?.slice(0, 3) || ['Expert'],
           availability: 'online',
-          type: clone.category,
-          specialty: clone.description,
-          sessions: clone.total_sessions,
-          priceFrom: clone.base_price,
-          priceTo: Math.floor(clone.base_price * 1.5),
-          avatar: clone.avatar_url || `/placeholder.svg?height=80&width=80`,
         }))
 
         setClones(transformedClones)
-        setTotalPages(response.pagination.total_pages)
+        setTotalPages(Math.ceil((count || 0) / 20))
       } catch (error) {
         console.error('Failed to fetch clones:', error)
         toast({
           title: "Failed to load clones",
-          description: "Using demo data instead",
+          description: "Please try again later",
           variant: "destructive",
         })
-        // Fall back to mock data
-        setClones(allExperts as ExpertData[])
+        // Set empty array on error
+        setClones([])
       } finally {
         setLoading(false)
       }

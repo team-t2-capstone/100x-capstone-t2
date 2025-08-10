@@ -12,36 +12,15 @@ import { DocumentManager } from '@/components/upload/document-manager'
 import { ProcessingMonitor } from '@/components/processing/processing-monitor'
 import { KnowledgeSearch } from '@/components/search/knowledge-search'
 import { useAuth } from '@/contexts/auth-context'
-
-// Mock clones data - in real app, this would come from API
-const mockClones = [
-  {
-    id: '1',
-    name: 'Business Expert',
-    description: 'Specialized in business strategy and operations',
-    document_count: 12,
-    status: 'active'
-  },
-  {
-    id: '2', 
-    name: 'Technical Writer',
-    description: 'Expert in technical documentation and communication',
-    document_count: 8,
-    status: 'active'
-  },
-  {
-    id: '3',
-    name: 'Marketing Guru',
-    description: 'Digital marketing and growth strategies',
-    document_count: 15,
-    status: 'training'
-  }
-]
+import { useEffect } from 'react'
+import { supabase } from '@/lib/supabase'
 
 export default function UploadPage() {
   const { user } = useAuth()
   const [selectedCloneId, setSelectedCloneId] = useState<string>('')
   const [refreshTrigger, setRefreshTrigger] = useState(0)
+  const [clones, setClones] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
 
   const handleUploadComplete = (documents: any[]) => {
     console.log('Upload completed:', documents)
@@ -49,7 +28,48 @@ export default function UploadPage() {
     setRefreshTrigger(prev => prev + 1)
   }
 
-  const selectedClone = mockClones.find(clone => clone.id === selectedCloneId)
+  // Fetch user's clones from Supabase
+  useEffect(() => {
+    async function fetchClones() {
+      if (!user?.id) return
+      
+      try {
+        setLoading(true)
+        const { data, error } = await supabase
+          .from('clones')
+          .select(`
+            id,
+            name,
+            description,
+            is_active,
+            total_sessions,
+            documents!documents_clone_id_fkey(id)
+          `)
+          .eq('creator_id', user.id)
+          .eq('is_active', true)
+        
+        if (error) throw error
+        
+        const clonesWithDocCount = data?.map(clone => ({
+          id: clone.id,
+          name: clone.name,
+          description: clone.description || '',
+          document_count: clone.documents?.length || 0,
+          status: clone.is_active ? 'active' : 'inactive'
+        })) || []
+        
+        setClones(clonesWithDocCount)
+      } catch (error) {
+        console.error('Error fetching clones:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchClones()
+  }, [user?.id])
+
+  const selectedClone = clones.find(clone => clone.id === selectedCloneId)
 
   if (!user) {
     return (
@@ -92,7 +112,12 @@ export default function UploadPage() {
                   <SelectValue placeholder="Choose a clone..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {mockClones.map((clone) => (
+                  {loading ? (
+                    <SelectItem value="loading" disabled>Loading clones...</SelectItem>
+                  ) : clones.length === 0 ? (
+                    <SelectItem value="no-clones" disabled>No clones found</SelectItem>
+                  ) : (
+                    clones.map((clone) => (
                     <SelectItem key={clone.id} value={clone.id}>
                       <div className="flex items-center justify-between w-full">
                         <span>{clone.name}</span>
@@ -109,7 +134,8 @@ export default function UploadPage() {
                         </div>
                       </div>
                     </SelectItem>
-                  ))}
+                  ))
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -219,19 +245,68 @@ export default function UploadPage() {
 
 // Statistics component
 function UploadStatistics({ cloneId }: { cloneId: string }) {
-  // Mock statistics data - in real app, this would come from API
-  const stats = {
-    total_documents: 12,
-    total_size_bytes: 45 * 1024 * 1024, // 45MB
-    total_chunks: 1247,
+  const [stats, setStats] = useState({
+    total_documents: 0,
+    total_size_bytes: 0,
+    total_chunks: 0,
     status_counts: {
-      completed: 10,
-      processing: 1,
-      pending: 1,
+      completed: 0,
+      processing: 0,
+      pending: 0,
       failed: 0,
     },
-    processing_queue_length: 2,
-  }
+    processing_queue_length: 0,
+  })
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    async function fetchStats() {
+      if (!cloneId) return
+      
+      try {
+        setLoading(true)
+        // Get documents for this clone
+        const { data: documents, error: docsError } = await supabase
+          .from('documents')
+          .select('id, file_size_bytes, processing_status, chunk_count')
+          .eq('clone_id', cloneId)
+        
+        if (docsError) throw docsError
+        
+        // Get document chunks
+        const { data: chunks, error: chunksError } = await supabase
+          .from('document_chunks')
+          .select('id')
+          .in('document_id', documents?.map(d => d.id) || [])
+        
+        if (chunksError) throw chunksError
+        
+        const statusCounts = documents?.reduce((acc, doc) => {
+          acc[doc.processing_status] = (acc[doc.processing_status] || 0) + 1
+          return acc
+        }, {} as any) || {}
+        
+        setStats({
+          total_documents: documents?.length || 0,
+          total_size_bytes: documents?.reduce((sum, doc) => sum + (doc.file_size_bytes || 0), 0) || 0,
+          total_chunks: chunks?.length || 0,
+          status_counts: {
+            completed: statusCounts.completed || 0,
+            processing: statusCounts.processing || 0,
+            pending: statusCounts.pending || 0,
+            failed: statusCounts.failed || 0,
+          },
+          processing_queue_length: statusCounts.processing || 0,
+        })
+      } catch (error) {
+        console.error('Error fetching upload statistics:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchStats()
+  }, [cloneId])
 
   const formatFileSize = (bytes: number) => {
     const k = 1024

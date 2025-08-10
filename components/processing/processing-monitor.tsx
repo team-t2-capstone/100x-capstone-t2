@@ -7,8 +7,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AlertCircle, CheckCircle2, Clock, FileText, RefreshCw, Search, Loader2, Zap, Database } from 'lucide-react'
 import { Separator } from '@/components/ui/separator'
-import { apiClient } from '@/lib/api-client'
 import { useToast } from '@/hooks/use-toast'
+import { supabase } from '@/lib/supabase'
 
 interface ProcessingStats {
   total_documents: number
@@ -45,23 +45,41 @@ export function ProcessingMonitor({ cloneId, refreshInterval = 5000 }: Processin
   // Load processing statistics
   const loadStats = async () => {
     try {
-      // Mock API call - replace with actual endpoint
-      // const response = await apiClient.get(`/clones/${cloneId}/processing/stats`)
+      // Get documents for this clone
+      const { data: documents, error: docsError } = await supabase
+        .from('documents')
+        .select('id, processing_status, chunk_count')
+        .eq('clone_id', cloneId)
       
-      // Mock data for demonstration
-      const mockStats: ProcessingStats = {
-        total_documents: 8,
+      if (docsError) throw docsError
+      
+      // Get total chunks for this clone
+      const { data: chunks, error: chunksError } = await supabase
+        .from('document_chunks')
+        .select('id')
+        .in('document_id', documents?.map(d => d.id) || [])
+      
+      if (chunksError) throw chunksError
+      
+      // Calculate status counts
+      const statusCounts = documents?.reduce((acc, doc) => {
+        acc[doc.processing_status] = (acc[doc.processing_status] || 0) + 1
+        return acc
+      }, {} as Record<string, number>) || {}
+      
+      const stats: ProcessingStats = {
+        total_documents: documents?.length || 0,
         status_counts: {
-          completed: 6,
-          processing: 1,
-          pending: 1,
-          failed: 0,
+          completed: statusCounts.completed || 0,
+          processing: statusCounts.processing || 0,
+          pending: statusCounts.pending || 0,
+          failed: statusCounts.failed || 0,
         },
-        total_chunks: 147,
-        processing_queue_length: 2,
+        total_chunks: chunks?.length || 0,
+        processing_queue_length: statusCounts.processing || 0,
       }
       
-      setStats(mockStats)
+      setStats(stats)
       setLastUpdated(new Date())
     } catch (error: any) {
       console.error('Failed to load processing stats:', error)

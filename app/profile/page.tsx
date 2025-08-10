@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useAuth } from '@/contexts/auth-context'
 import { useUserProfile } from '@/hooks/use-dashboard'
 import { useAdvancedBilling } from '@/hooks/use-billing'
@@ -22,6 +22,36 @@ export default function ProfilePage() {
   const { user } = useAuth()
   const [isEditing, setIsEditing] = useState(false)
   
+  // All useState hooks must be declared at the top
+  const [profileData, setProfileData] = useState({
+    firstName: "",
+    lastName: "",
+    email: "",
+    phone: "",
+    location: "",
+    bio: "",
+    dateOfBirth: "",
+    timezone: "America/Los_Angeles",
+    avatar: "/placeholder.svg?height=120&width=120",
+  })
+  
+  const [preferences, setPreferences] = useState({
+    emailNotifications: true,
+    pushNotifications: true,
+    sessionReminders: true,
+    marketingEmails: false,
+    weeklyDigest: true,
+    darkMode: false,
+    language: "en",
+    currency: "USD",
+  })
+  
+  const [securitySettings, setSecuritySettings] = useState({
+    twoFactorAuth: false,
+    sessionTimeout: "30",
+    loginAlerts: true,
+  })
+  
   const {
     profile,
     loading,
@@ -42,49 +72,25 @@ export default function ProfilePage() {
     downloadInvoice
   } = useAdvancedBilling(user?.id || '')
   
-  // Local state for form data
-  const [profileData, setProfileData] = useState({
-    firstName: "",
-    lastName: "",
-    email: "",
-    phone: "",
-    location: "",
-    bio: "",
-    dateOfBirth: "",
-    timezone: "America/Los_Angeles",
-    avatar: "/placeholder.svg?height=120&width=120",
-  })
-  
   // Update local state when profile data loads
-  useState(() => {
+  useEffect(() => {
     if (profile && !isEditing) {
       setProfileData({
-        firstName: profile.firstName || "",
-        lastName: profile.lastName || "",
+        firstName: profile.full_name?.split(' ')[0] || "",
+        lastName: profile.full_name?.split(' ')[1] || "",
         email: profile.email || "",
         phone: profile.phone || "",
         location: profile.location || "",
         bio: profile.bio || "",
         dateOfBirth: profile.dateOfBirth || "",
         timezone: profile.timezone || "America/Los_Angeles",
-        avatar: profile.avatar || "/placeholder.svg?height=120&width=120",
+        avatar: profile.avatar_url || "/placeholder.svg?height=120&width=120",
       })
     }
   }, [profile, isEditing])
 
-  const [preferences, setPreferences] = useState({
-    emailNotifications: true,
-    pushNotifications: true,
-    sessionReminders: true,
-    marketingEmails: false,
-    weeklyDigest: true,
-    darkMode: false,
-    language: "en",
-    currency: "USD",
-  })
-  
   // Update preferences when profile loads
-  useState(() => {
+  useEffect(() => {
     if (profile?.preferences) {
       setPreferences({
         emailNotifications: profile.preferences.emailNotifications ?? true,
@@ -132,12 +138,6 @@ export default function ProfilePage() {
       </div>
     )
   }
-
-  const [securitySettings, setSecuritySettings] = useState({
-    twoFactorAuth: false,
-    sessionTimeout: "30",
-    loginAlerts: true,
-  })
 
   const handleSaveProfile = async () => {
     const success = await updateProfile(profileData)

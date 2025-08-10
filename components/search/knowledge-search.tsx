@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/hooks/use-toast'
-import { apiClient } from '@/lib/api-client'
+import { supabase } from '@/lib/supabase'
 
 interface SearchResult {
   chunk_id: string
@@ -66,76 +66,82 @@ export function KnowledgeSearch({ cloneId, onResultSelect }: KnowledgeSearchProp
 
     setLoading(true)
     try {
-      // Mock search for demonstration - replace with actual API call
-      const mockResponse: SearchResponse = {
-        query: query,
-        results: [
-          {
-            chunk_id: '1',
-            content: `This document discusses advanced machine learning techniques for natural language processing. The content covers transformer architectures, attention mechanisms, and their applications in modern AI systems. Key concepts include self-attention, multi-head attention, and the role of positional encoding in sequence-to-sequence models.`,
-            similarity_score: 0.92,
-            source: {
-              type: 'document',
-              document_id: 'doc-1',
-              document_title: 'AI and Machine Learning Fundamentals.pdf',
-              chunk_index: 3
-            },
-            doc_metadata: {
-              pages: 45,
-              file_size: 2048000,
-              upload_date: '2024-01-15T10:30:00Z'
-            }
-          },
-          {
-            chunk_id: '2',
-            content: `The implementation of neural networks requires careful consideration of hyperparameters, including learning rates, batch sizes, and regularization techniques. This section explores best practices for training deep learning models and avoiding common pitfalls like overfitting and vanishing gradients.`,
-            similarity_score: 0.87,
-            source: {
-              type: 'document',
-              document_id: 'doc-2',
-              document_title: 'Deep Learning Best Practices.docx',
-              chunk_index: 7
-            },
-            doc_metadata: {
-              author: 'Dr. Smith',
-              created: '2024-02-01T14:20:00Z'
-            }
-          },
-          {
-            chunk_id: '3',
-            content: `Data preprocessing is a critical step in any machine learning pipeline. This includes data cleaning, normalization, feature engineering, and handling missing values. The quality of your input data directly impacts model performance and generalization.`,
-            similarity_score: 0.81,
-            source: {
-              type: 'document',
-              document_id: 'doc-3',
-              document_title: 'Data Science Handbook.txt',
-              chunk_index: 12
-            },
-            doc_metadata: {
-              lines: 450,
-              encoding: 'utf-8'
-            }
-          }
-        ],
-        total_results: 3,
-        search_metadata: {
+      const startTime = Date.now()
+      
+      // Get documents for this clone first
+      const { data: documents, error: docsError } = await supabase
+        .from('documents')
+        .select('id, title, file_name')
+        .eq('clone_id', cloneId)
+        .eq('processing_status', 'completed')
+      
+      if (docsError) throw docsError
+      
+      if (!documents || documents.length === 0) {
+        setResults([])
+        setSearchMetadata({
           similarity_threshold: similarityThreshold[0],
-          search_method: 'rag_processor_with_embeddings',
-          execution_time_ms: 156,
+          search_method: 'text_search',
+          execution_time_ms: Date.now() - startTime,
           include_metadata: true
-        },
-        searched_at: new Date().toISOString()
+        })
+        return
       }
-
-      // Simulate API delay
-      await new Promise(resolve => setTimeout(resolve, 800))
-
-      setResults(mockResponse.results)
-      setSearchMetadata(mockResponse.search_metadata)
+      
+      // Search document chunks using text search
+      const { data: chunks, error: chunksError } = await supabase
+        .from('document_chunks')
+        .select('id, content, chunk_index, document_id, doc_metadata')
+        .in('document_id', documents.map(d => d.id))
+        .textSearch('content', query, {
+          type: 'websearch',
+          config: 'english'
+        })
+        .limit(parseInt(limit))
+      
+      if (chunksError) {
+        // Fallback to ilike search if text search fails
+        const { data: fallbackChunks, error: fallbackError } = await supabase
+          .from('document_chunks')
+          .select('id, content, chunk_index, document_id, doc_metadata')
+          .in('document_id', documents.map(d => d.id))
+          .ilike('content', `%${query}%`)
+          .limit(parseInt(limit))
+        
+        if (fallbackError) throw fallbackError
+        chunks = fallbackChunks
+      }
+      
+      // Transform results to match interface
+      const results: SearchResult[] = (chunks || []).map((chunk, index) => {
+        const document = documents.find(d => d.id === chunk.document_id)
+        return {
+          chunk_id: chunk.id,
+          content: chunk.content,
+          similarity_score: 0.8 - (index * 0.05), // Mock similarity score
+          source: {
+            type: 'document',
+            document_id: chunk.document_id,
+            document_title: document?.title || document?.file_name || 'Unknown Document',
+            chunk_index: chunk.chunk_index
+          },
+          doc_metadata: chunk.doc_metadata || {}
+        }
+      })
+      
+      const searchMetadata = {
+        similarity_threshold: similarityThreshold[0],
+        search_method: 'text_search',
+        execution_time_ms: Date.now() - startTime,
+        include_metadata: true
+      }
+      
+      setResults(results)
+      setSearchMetadata(searchMetadata)
 
       toast({
         title: "Search completed",
-        description: `Found ${mockResponse.total_results} relevant results`,
+        description: `Found ${results.length} relevant results`,
       })
     } catch (error: any) {
       console.error('Search failed:', error)

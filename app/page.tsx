@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
+import { supabase } from '@/lib/supabase'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
@@ -22,6 +23,7 @@ import {
   Scale,
   ChevronRight,
   CheckCircle,
+  Cpu,
 } from "lucide-react"
 import Link from "next/link"
 import { motion } from "framer-motion"
@@ -33,130 +35,141 @@ const expertTypes = {
   finance: { color: "bg-amber-500", icon: DollarSign, name: "Finance & Investment" },
   coaching: { color: "bg-orange-500", icon: Heart, name: "Life & Coaching" },
   legal: { color: "bg-indigo-900", icon: Scale, name: "Legal & Consulting" },
+  ai: { color: "bg-cyan-600", icon: Cpu, name: "AI" },
 }
 
-const featuredExperts = [
-  {
-    id: 1,
-    name: "Dr. Sarah Chen",
-    type: "coaching",
-    specialty: "Life Coach & Therapist",
-    avatar: "/placeholder.svg?height=80&width=80",
-    heroImage: "/placeholder.svg?height=300&width=400&text=Dr.+Sarah+Chen",
-    rating: 4.9,
-    sessions: 1247,
-    priceFrom: 25,
-    description: "Transform your mindset and achieve lasting personal growth",
-  },
-  {
-    id: 2,
-    name: "Marcus Rodriguez",
-    type: "business",
-    specialty: "Business Strategy Consultant",
-    avatar: "/placeholder.svg?height=80&width=80",
-    heroImage: "/placeholder.svg?height=300&width=400&text=Marcus+Rodriguez",
-    rating: 4.8,
-    sessions: 892,
-    priceFrom: 75,
-    description: "Scale your business with proven strategic frameworks",
-  },
-  {
-    id: 3,
-    name: "Prof. Emma Watson",
-    type: "education",
-    specialty: "Data Science Educator",
-    avatar: "/placeholder.svg?height=80&width=80",
-    heroImage: "/placeholder.svg?height=300&width=400&text=Prof.+Emma+Watson",
-    rating: 4.9,
-    sessions: 2156,
-    priceFrom: 35,
-    description: "Master data science with personalized learning paths",
-  },
-  {
-    id: 4,
-    name: "David Kim",
-    type: "medical",
-    specialty: "Fitness & Nutrition Expert",
-    avatar: "/placeholder.svg?height=80&width=80",
-    heroImage: "/placeholder.svg?height=300&width=400&text=David+Kim",
-    rating: 4.7,
-    sessions: 1543,
-    priceFrom: 20,
-    description: "Achieve optimal health through science-based approaches",
-  },
-]
+// Mock data removed - now using real Supabase data
 
-const categories = [
+// Categories with dynamic expert counts - will be fetched from Supabase
+const categoryTemplates = [
   {
     type: "medical",
     title: "Health & Wellness",
     description: "Medical advice, fitness, nutrition, and mental health support",
-    expertCount: 127,
-    image: "/placeholder.svg?height=200&width=300",
   },
   {
-    type: "business",
+    type: "business", 
     title: "Business & Strategy",
     description: "Strategic planning, leadership, and business growth guidance",
-    expertCount: 89,
-    image: "/placeholder.svg?height=200&width=300",
   },
   {
     type: "education",
-    title: "Education & Learning",
+    title: "Education & Learning", 
     description: "Academic tutoring, skill development, and knowledge transfer",
-    expertCount: 156,
-    image: "/placeholder.svg?height=200&width=300",
   },
   {
     type: "finance",
     title: "Finance & Investment",
     description: "Financial planning, investment advice, and wealth management",
-    expertCount: 73,
-    image: "/placeholder.svg?height=200&width=300",
   },
   {
     type: "coaching",
     title: "Life & Coaching",
     description: "Personal development, career coaching, and life guidance",
-    expertCount: 94,
-    image: "/placeholder.svg?height=200&width=300",
   },
   {
     type: "legal",
     title: "Legal & Consulting",
     description: "Legal advice, compliance, and professional consulting",
-    expertCount: 45,
-    image: "/placeholder.svg?height=200&width=300",
+  },
+  {
+    type: "ai",
+    title: "AI",
+    description: "Artificial intelligence, machine learning, and data science expertise",
   },
 ]
 
 const testimonials = [
   {
     name: "Jennifer Martinez",
-    role: "Startup Founder",
+    role: "Startup Founder", 
     content: "The business strategy clone helped me pivot my startup and increase revenue by 300% in 6 months.",
-    avatar: "/placeholder.svg?height=50&width=50",
+    avatar: `/api/placeholder/50/50`,
     rating: 5,
   },
   {
     name: "Michael Chen",
     role: "Software Engineer",
-    content: "Learning data science from Prof. Watson's clone was like having a personal tutor available 24/7.",
-    avatar: "/placeholder.svg?height=50&width=50",
+    content: "Learning data science from Prof. Watson's clone was like having a personal tutor available 24/7.", 
+    avatar: `/api/placeholder/50/50`,
     rating: 5,
   },
   {
-    name: "Sarah Johnson",
+    name: "Sarah Johnson", 
     role: "Marketing Manager",
     content: "Dr. Chen's life coaching clone helped me overcome burnout and find work-life balance.",
-    avatar: "/placeholder.svg?height=50&width=50",
+    avatar: `/api/placeholder/50/50`,
     rating: 5,
   },
 ]
 
 export default function HomePage() {
   const [searchQuery, setSearchQuery] = useState("")
+  const [featuredExperts, setFeaturedExperts] = useState<any[]>([])
+  const [categories, setCategories] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  // Fetch featured experts and categories from Supabase
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        // Fetch featured experts
+        const { data: expertsData, error: expertsError } = await supabase
+          .from('clones')
+          .select('*')
+          .eq('is_published', true)
+          .eq('is_active', true)
+          .order('average_rating', { ascending: false })
+          .limit(4)
+
+        if (expertsError) {
+          console.error('Error fetching featured experts:', expertsError)
+        } else {
+          // Transform data to match the component's expected format
+          const transformedExperts = (expertsData || []).map(expert => ({
+            id: expert.id,
+            name: expert.name,
+            type: expert.category,
+            specialty: expert.description,
+            avatar: expert.avatar_url || `/api/placeholder/80/80`,
+            heroImage: `/api/placeholder/400/300`,
+            rating: expert.average_rating || 4.0,
+            sessions: expert.total_sessions || 0,
+            priceFrom: expert.base_price || 25,
+            description: expert.bio || expert.description || "Expert guidance available",
+          }))
+          setFeaturedExperts(transformedExperts)
+        }
+
+        // Fetch category counts
+        const categoriesWithCounts = await Promise.all(
+          categoryTemplates.map(async (category) => {
+            const { count, error } = await supabase
+              .from('clones')
+              .select('*', { count: 'exact', head: true })
+              .eq('category', category.type)
+              .eq('is_published', true)
+              .eq('is_active', true)
+
+            return {
+              ...category,
+              expertCount: count || 0,
+              image: `/api/placeholder/300/200`,
+            }
+          })
+        )
+
+        setCategories(categoriesWithCounts)
+
+      } catch (error) {
+        console.error('Error fetching data:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchData()
+  }, [])
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900">
@@ -244,8 +257,21 @@ export default function HomePage() {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
-            {featuredExperts.map((expert, index) => {
+          {loading ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+              {[...Array(4)].map((_, index) => (
+                <div key={index} className="animate-pulse">
+                  <div className="bg-slate-200 dark:bg-slate-700 rounded-lg h-80"></div>
+                </div>
+              ))}
+            </div>
+          ) : featuredExperts.length === 0 ? (
+            <div className="text-center py-12">
+              <p className="text-slate-600 dark:text-slate-300">No featured experts available at the moment.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+              {featuredExperts.map((expert, index) => {
               const typeConfig = expertTypes[expert.type as keyof typeof expertTypes]
               return (
                 <motion.div
@@ -329,7 +355,8 @@ export default function HomePage() {
                 </motion.div>
               )
             })}
-          </div>
+            </div>
+          )}
 
           <div className="text-center mt-6 sm:mt-8">
             <Link href="/discover">

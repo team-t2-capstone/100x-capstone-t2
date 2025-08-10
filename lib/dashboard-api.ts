@@ -228,10 +228,50 @@ export class DashboardApi {
 
   async deleteClone(cloneId: string) {
     try {
-      await apiClient.delete(`/clones/${cloneId}`);
-    } catch (error) {
-      const apiError = parseApiError(error as AxiosError);
-      throw new Error(`Failed to delete clone: ${apiError.message}`);
+      const { supabase } = await import('./supabase');
+      
+      // Delete all related data first (cascade delete)
+      // Delete related sessions
+      const { error: sessionsError } = await supabase
+        .from('sessions')
+        .delete()
+        .eq('clone_id', cloneId);
+      
+      if (sessionsError) {
+        console.warn('Error deleting sessions:', sessionsError);
+      }
+      
+      // Delete related knowledge entries
+      const { error: knowledgeError } = await supabase
+        .from('knowledge_entries')
+        .delete()
+        .eq('clone_id', cloneId);
+      
+      if (knowledgeError) {
+        console.warn('Error deleting knowledge entries:', knowledgeError);
+      }
+      
+      // Delete related documents
+      const { error: documentsError } = await supabase
+        .from('documents')
+        .delete()
+        .eq('clone_id', cloneId);
+      
+      if (documentsError) {
+        console.warn('Error deleting documents:', documentsError);
+      }
+      
+      // Finally, delete the clone itself
+      const { error: cloneError } = await supabase
+        .from('clones')
+        .delete()
+        .eq('id', cloneId);
+      
+      if (cloneError) throw cloneError;
+      
+      return { success: true };
+    } catch (error: any) {
+      throw new Error(`Failed to delete clone: ${error.message}`);
     }
   }
 
