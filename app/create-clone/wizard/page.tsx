@@ -133,7 +133,7 @@ function CloneWizardContent() {
     bio: "",
     expertise: "",
     customDomain: "",
-    credentials: [] as string[],
+    credentials: "",
     languages: [] as string[],
     photo: null as File | null,
     existingAvatarUrl: "",
@@ -159,6 +159,8 @@ function CloneWizardContent() {
     // Step 5: Media Training
     audioSample: null as File | null,
     videoSample: null as File | null,
+    enableAudio: false,
+    enableVideo: false,
 
     // Step 6: Testing (results)
     testResults: {
@@ -177,7 +179,6 @@ function CloneWizardContent() {
     status: "draft" as "draft" | "published",
   })
 
-  const [newCredential, setNewCredential] = useState("")
   const [newLanguage, setNewLanguage] = useState("")
   const [newLink, setNewLink] = useState("")
 
@@ -214,18 +215,13 @@ function CloneWizardContent() {
       if (clone) {
         console.log('Loading clone data:', clone)
         console.log('Credentials from DB:', clone.credentials_qualifications)
+        console.log('Credentials type:', typeof clone.credentials_qualifications)
         console.log('Avatar URL from DB:', clone.avatar_url)
         console.log('Expertise areas from DB:', clone.expertise_areas)
         
-        // Parse credentials with better handling
-        let credentialsArray = []
-        if (clone.credentials_qualifications && typeof clone.credentials_qualifications === 'string') {
-          credentialsArray = clone.credentials_qualifications.split(',').map(c => c.trim()).filter(c => c.length > 0)
-        } else if (Array.isArray(clone.expertise_areas)) {
-          credentialsArray = clone.expertise_areas
-        }
-        
-        console.log('Parsed credentials array:', credentialsArray)
+        // Load credentials as simple text
+        const credentialsText = clone.credentials_qualifications || ""
+        console.log('Loading credentials as text:', credentialsText)
         
         // Load Q&A responses
         const qaResponses = await loadQAResponses(cloneId)
@@ -238,7 +234,7 @@ function CloneWizardContent() {
           bio: clone.bio || "",
           expertise: clone.category || "",
           customDomain: clone.category === 'other' || !Object.keys(expertTypes).includes(clone.category) ? clone.category : "",
-          credentials: credentialsArray,
+          credentials: credentialsText,
           languages: clone.languages || ['English'],
           photo: null,
           existingAvatarUrl: clone.avatar_url || "",
@@ -264,10 +260,17 @@ function CloneWizardContent() {
           // Step 5: Media Training
           audioSample: null,
           videoSample: null,
+          enableAudio: false,
+          enableVideo: false,
 
           // Step 6: Testing & Preview
           testPrompt: "",
           testResponse: "",
+          testResults: {
+            accuracy: 85,
+            personality: 92,
+            knowledge: 88,
+          },
 
           // Step 7: Pricing & Launch
           pricing: {
@@ -282,6 +285,13 @@ function CloneWizardContent() {
           title: "Clone data loaded",
           description: "Your existing clone data has been loaded for editing",
         })
+
+        // Navigate to the first incomplete section after data loads
+        setTimeout(() => {
+          const nextIncompleteStep = findFirstIncompleteSection()
+          console.log('Navigating to first incomplete section:', nextIncompleteStep)
+          setCurrentStep(nextIncompleteStep)
+        }, 100)
       }
     } catch (error) {
       console.error('Error loading clone:', error)
@@ -312,15 +322,34 @@ function CloneWizardContent() {
     let completedSections = 0
     
     // Section 1: Basic Information
-    if (formData.name && formData.title && formData.expertise && formData.bio) {
-      if (formData.expertise !== "other" || formData.customDomain) {
-        completedSections++
-      }
+    const section1Complete = formData.name && formData.title && formData.expertise && formData.bio &&
+      (formData.expertise !== "other" || formData.customDomain)
+    
+    console.log('Section 1 Debug:', {
+      name: !!formData.name,
+      title: !!formData.title,
+      expertise: !!formData.expertise,
+      bio: !!formData.bio,
+      customDomain: formData.customDomain,
+      expertiseValue: formData.expertise,
+      section1Complete
+    })
+    
+    if (section1Complete) {
+      completedSections++
     }
     
     // Section 2: Q&A Training
-    const answeredQuestions = Object.values(formData.qaResponses).filter(answer => answer.trim()).length
-    if (answeredQuestions >= 5) {
+    const answeredQuestions = Object.values(formData.qaResponses).filter(answer => answer && answer.trim()).length
+    const section2Complete = answeredQuestions >= 5
+    
+    console.log('Section 2 Debug:', {
+      qaResponses: formData.qaResponses,
+      answeredQuestions,
+      section2Complete
+    })
+    
+    if (section2Complete) {
       completedSections++
     }
     
@@ -328,7 +357,14 @@ function CloneWizardContent() {
     completedSections++
     
     // Section 4: Personality & Style
-    if (formData.communicationStyle && formData.responseLength) {
+    const section4Complete = formData.communicationStyle && formData.responseLength
+    console.log('Section 4 Debug:', {
+      communicationStyle: formData.communicationStyle,
+      responseLength: formData.responseLength,
+      section4Complete
+    })
+    
+    if (section4Complete) {
       completedSections++
     }
     
@@ -339,14 +375,135 @@ function CloneWizardContent() {
     completedSections++
     
     // Section 7: Pricing & Launch
-    if (formData.pricing.text.min > 0 && formData.pricing.voice.min > 0 && formData.pricing.video.min > 0) {
+    const section7Complete = formData.pricing.text.min > 0 && formData.pricing.voice.min > 0 && formData.pricing.video.min > 0
+    console.log('Section 7 Debug:', {
+      pricingText: formData.pricing.text.min,
+      pricingVoice: formData.pricing.voice.min,
+      pricingVideo: formData.pricing.video.min,
+      section7Complete
+    })
+    
+    if (section7Complete) {
       completedSections++
     }
     
-    return Math.round((completedSections / totalSections) * 100)
+    const progressPercentage = Math.round((completedSections / totalSections) * 100)
+    console.log('Progress Calculation:', {
+      completedSections,
+      totalSections,
+      progressPercentage,
+      formData
+    })
+    
+    return progressPercentage
+  }
+
+  // Function to find the first incomplete section
+  const findFirstIncompleteSection = () => {
+    // Section 1: Basic Information
+    const section1Complete = formData.name && formData.title && formData.expertise && formData.bio &&
+      (formData.expertise !== "other" || formData.customDomain)
+    if (!section1Complete) return 1
+
+    // Section 2: Q&A Training
+    const answeredQuestions = Object.values(formData.qaResponses).filter(answer => answer && answer.trim()).length
+    if (answeredQuestions < 5) return 2
+
+    // Section 3: Knowledge Transfer (optional - skip to next if not needed)
+    // Since this is optional, check if section 4 is complete
+    
+    // Section 4: Personality & Style
+    const section4Complete = formData.communicationStyle && formData.responseLength
+    if (!section4Complete) return 4
+
+    // Section 5: Media Training (optional - skip to next)
+    
+    // Section 6: Testing & Preview (always available)
+    
+    // Section 7: Pricing & Launch
+    const section7Complete = formData.pricing.text.min > 0 && formData.pricing.voice.min > 0 && formData.pricing.video.min > 0
+    if (!section7Complete) return 7
+
+    // If all are complete, go to step 6 (Testing)
+    return 6
   }
   
   const progress = calculateProgress()
+
+  // Generate system prompt for OpenAI based on clone data
+  const generateSystemPrompt = () => {
+    const qaContext = Object.entries(formData.qaResponses)
+      .filter(([_, answer]) => answer && answer.trim())
+      .map(([question, answer]) => `Q: ${question}\nA: ${answer}`)
+      .join('\n\n')
+
+    const personalityTraits = Object.entries(formData.personality)
+      .map(([trait, value]) => `${trait}: ${value[0]}/100`)
+      .join(', ')
+
+    const systemPrompt = `You are ${formData.name}, a professional ${formData.title || 'expert'} specializing in ${formData.expertise}.
+
+PROFESSIONAL BACKGROUND:
+${formData.credentials ? `Credentials & Qualifications: ${formData.credentials}` : ''}
+Bio: ${formData.bio}
+
+PERSONALITY TRAITS (scale 1-100):
+${personalityTraits}
+
+COMMUNICATION STYLE:
+- Style: ${formData.communicationStyle}
+- Response Length: ${formData.responseLength}
+- Languages: ${formData.languages.join(', ')}
+
+TRAINING DATA & EXPERTISE:
+${qaContext}
+
+INSTRUCTIONS:
+- Respond as ${formData.name} would, drawing from your professional background and training data
+- Match the specified personality traits and communication style
+- Stay in character and provide helpful, professional advice within your area of expertise
+- If asked about topics outside your expertise, acknowledge your limitations and redirect to your strengths
+- Keep responses ${formData.responseLength === 'short' ? 'concise (1-2 sentences)' : formData.responseLength === 'medium' ? 'moderate length (2-4 sentences)' : 'detailed (multiple paragraphs)'}
+- Use a ${formData.communicationStyle} tone throughout`
+
+    return systemPrompt
+  }
+
+  // Test clone with OpenAI API
+  const testCloneWithAI = async (userMessage: string) => {
+    try {
+      const systemPrompt = generateSystemPrompt()
+      
+      console.log('System Prompt:', systemPrompt)
+      console.log('User Message:', userMessage)
+      
+      const response = await fetch('/api/chat/test-clone', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          systemPrompt,
+          userMessage,
+          conversationHistory: testMessages.filter(msg => msg.sender !== 'clone' || msg.id === '1').map(msg => ({
+            role: msg.sender === 'user' ? 'user' : 'assistant',
+            content: msg.content
+          }))
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error(`API Error: ${response.status}`)
+      }
+
+      const data = await response.json()
+      return data.response
+
+    } catch (error) {
+      console.error('Error testing clone:', error)
+      return "I'm sorry, I'm having trouble responding right now. Please try again later."
+    }
+  }
 
   // Validation functions for each step
   const validateStep = (step: number): { isValid: boolean; errors: string[] } => {
@@ -575,7 +732,7 @@ function CloneWizardContent() {
         const cloneData: CloneCreateRequest = {
           name: formData.name || 'Untitled Clone',
           category: formData.expertise === 'other' ? formData.customDomain || 'Other' : formData.expertise || 'coaching',
-          expertise_areas: formData.credentials,
+          expertise_areas: [],
           base_price: formData.pricing.text.min || 25,
           bio: formData.bio,
           personality_traits: formData.personality,
@@ -592,10 +749,10 @@ function CloneWizardContent() {
           name: cloneData.name,
           professional_title: formData.title,
           bio: cloneData.bio,
-          credentials_qualifications: formData.credentials.length > 0 ? formData.credentials.join(', ') : null,
+          credentials_qualifications: formData.credentials.trim() || null,
           avatar_url: avatarUrl || formData.existingAvatarUrl || null,
           category: cloneData.category,
-          expertise_areas: cloneData.expertise_areas,
+          expertise_areas: [],
           languages: cloneData.languages.length > 0 ? cloneData.languages : ['English'],
           base_price: cloneData.base_price,
           personality_traits: cloneData.personality_traits,
@@ -606,6 +763,7 @@ function CloneWizardContent() {
 
         console.log('Creating clone with data:', supabaseCloneData)
         console.log('Credentials being saved:', formData.credentials)
+        console.log('Credentials trimmed:', formData.credentials.trim())
         console.log('Avatar URL being saved:', avatarUrl || formData.existingAvatarUrl)
 
         const { data: clone, error } = await supabase
@@ -636,7 +794,7 @@ function CloneWizardContent() {
         // Update existing clone
         const updateData = {
           name: formData.name,
-          expertise_areas: formData.credentials,
+          expertise_areas: [],
           base_price: formData.pricing.text.min,
           bio: formData.bio,
           personality_traits: formData.personality,
@@ -652,10 +810,10 @@ function CloneWizardContent() {
           name: updateData.name,
           professional_title: formData.title,
           bio: updateData.bio,
-          credentials_qualifications: formData.credentials.length > 0 ? formData.credentials.join(', ') : null,
+          credentials_qualifications: formData.credentials.trim() || null,
           avatar_url: avatarUrl || formData.existingAvatarUrl || null,
           category: formData.expertise === 'other' ? formData.customDomain || 'Other' : formData.expertise || 'coaching',
-          expertise_areas: updateData.expertise_areas,
+          expertise_areas: [],
           languages: updateData.languages.length > 0 ? updateData.languages : ['English'],
           base_price: updateData.base_price,
           personality_traits: updateData.personality_traits,
@@ -665,6 +823,7 @@ function CloneWizardContent() {
         
         console.log('Updating clone with data:', supabaseUpdateData)
         console.log('Credentials being updated:', formData.credentials)
+        console.log('Credentials trimmed:', formData.credentials.trim())
         console.log('Avatar URL being updated:', avatarUrl || formData.existingAvatarUrl)
         
         const { error } = await supabase
@@ -768,22 +927,6 @@ function CloneWizardContent() {
     }
   }
 
-  const addCredential = () => {
-    if (newCredential.trim()) {
-      setFormData({
-        ...formData,
-        credentials: [...formData.credentials, newCredential.trim()],
-      })
-      setNewCredential("")
-    }
-  }
-
-  const removeCredential = (index: number) => {
-    setFormData({
-      ...formData,
-      credentials: formData.credentials.filter((_, i) => i !== index),
-    })
-  }
 
   const addLanguage = () => {
     if (newLanguage.trim()) {
@@ -819,7 +962,7 @@ function CloneWizardContent() {
     })
   }
 
-  const handleTestMessage = () => {
+  const handleTestMessage = async () => {
     if (!testInput.trim()) return
 
     const userMessage = {
@@ -829,28 +972,49 @@ function CloneWizardContent() {
       timestamp: new Date(),
     }
 
-    setTestMessages([...testMessages, userMessage])
+    setTestMessages(prev => [...prev, userMessage])
     setTestInput("")
 
-    // Simulate AI response
-    setTimeout(() => {
-      const responses = [
-        "That's a great question! Based on my experience, I'd recommend starting with small, manageable goals. What specific area would you like to focus on first?",
-        "I understand what you're going through. Many of my clients have faced similar challenges. Let me share a framework that has been particularly effective...",
-        "Thank you for sharing that with me. It takes courage to open up about these feelings. Here's how I typically approach this situation...",
-        "That's an excellent insight! You're already showing great self-awareness. Let's build on that foundation...",
-        "I hear you, and what you're experiencing is completely normal. Here are some practical strategies we can explore together...",
-      ]
+    // Show typing indicator
+    const typingMessage = {
+      id: "typing",
+      content: "Typing...",
+      sender: "clone" as "user" | "clone",
+      timestamp: new Date(),
+    }
+    
+    setTestMessages(prev => [...prev, typingMessage])
 
-      const cloneMessage = {
-        id: (Date.now() + 1).toString(),
-        content: responses[Math.floor(Math.random() * responses.length)],
-        sender: "clone" as "user" | "clone",
-        timestamp: new Date(),
-      }
-
-      setTestMessages((prev) => [...prev, cloneMessage])
-    }, 1500)
+    try {
+      // Get AI response using OpenAI
+      const aiResponse = await testCloneWithAI(userMessage.content)
+      
+      // Remove typing indicator and add real response
+      setTestMessages(prev => {
+        const withoutTyping = prev.filter(msg => msg.id !== "typing")
+        const cloneMessage = {
+          id: (Date.now() + 1).toString(),
+          content: aiResponse || "I'm sorry, I'm having trouble processing that right now. Could you try rephrasing your question?",
+          sender: "clone" as "user" | "clone",
+          timestamp: new Date(),
+        }
+        return [...withoutTyping, cloneMessage]
+      })
+    } catch (error) {
+      console.error('Error getting AI response:', error)
+      
+      // Remove typing indicator and show error message
+      setTestMessages(prev => {
+        const withoutTyping = prev.filter(msg => msg.id !== "typing")
+        const errorMessage = {
+          id: (Date.now() + 1).toString(),
+          content: "I apologize, but I'm experiencing some technical difficulties. Please try again in a moment.",
+          sender: "clone" as "user" | "clone",
+          timestamp: new Date(),
+        }
+        return [...withoutTyping, errorMessage]
+      })
+    }
   }
 
   const renderStepContent = () => {
@@ -986,28 +1150,14 @@ function CloneWizardContent() {
 
             <div className="space-y-4">
               <div>
-                <Label>Credentials & Qualifications</Label>
-                <div className="flex space-x-2 mb-2">
-                  <Input
-                    value={newCredential}
-                    onChange={(e) => setNewCredential(e.target.value)}
-                    placeholder="PhD Psychology - Stanford University"
-                    onKeyPress={(e) => e.key === "Enter" && addCredential()}
-                  />
-                  <Button onClick={addCredential} variant="outline" className="bg-transparent">
-                    <Plus className="h-4 w-4" />
-                  </Button>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {formData.credentials.map((credential, index) => (
-                    <Badge key={index} variant="secondary" className="flex items-center space-x-1">
-                      <span>{credential}</span>
-                      <button onClick={() => removeCredential(index)}>
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ))}
-                </div>
+                <Label htmlFor="credentials">Credentials & Qualifications</Label>
+                <Textarea
+                  id="credentials"
+                  value={formData.credentials}
+                  onChange={(e) => setFormData({ ...formData, credentials: e.target.value })}
+                  placeholder="&#10;Example:&#10;PhD Psychology - Stanford University&#10;Licensed Clinical Therapist&#10;10+ years experience in cognitive behavioral therapy"
+                  rows={4}
+                />
               </div>
 
               <div>
@@ -1347,74 +1497,134 @@ function CloneWizardContent() {
                 ✅ This step is optional. Voice and video training can enhance your clone's capabilities, but you can skip this and add media training later.
               </p>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center space-x-2">
-                    <Mic className="h-5 w-5" />
-                    <span>Voice Training</span>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <p className="text-sm text-slate-600 dark:text-slate-300">
-                    Upload a 2-3 minute audio sample to train your clone's voice
-                  </p>
-                  <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-lg p-6 text-center">
-                    <Mic className="h-8 w-8 text-slate-400 mx-auto mb-2" />
-                    <p className="text-sm font-medium mb-2">Record or Upload Audio</p>
-                    <div className="flex space-x-2 justify-center">
-                      <Button variant="outline" size="sm" className="bg-transparent">
-                        Record
-                      </Button>
-                      <Button variant="outline" size="sm" className="bg-transparent">
-                        Upload File
-                      </Button>
+            
+            {/* Toggle Controls */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Media Training Options</CardTitle>
+                <p className="text-sm text-slate-600 dark:text-slate-300">
+                  Choose which media types you want to train your clone with
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between p-4 border rounded-lg">
+                  <div className="flex items-center space-x-3">
+                    <Mic className="h-5 w-5 text-slate-600" />
+                    <div>
+                      <p className="font-medium">Audio Training</p>
+                      <p className="text-sm text-slate-500">Train your clone's voice</p>
                     </div>
                   </div>
-                  {formData.audioSample && (
-                    <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                      <div className="flex items-center space-x-2">
-                        <Mic className="h-4 w-4 text-slate-500" />
-                        <span className="text-sm">{formData.audioSample.name}</span>
-                      </div>
+                  <Button
+                    variant={formData.enableAudio ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => {
+                      console.log('Audio toggle clicked, current state:', formData.enableAudio)
+                      setFormData({...formData, enableAudio: !formData.enableAudio})
+                    }}
+                  >
+                    {formData.enableAudio ? "Enabled" : "Enable"}
+                  </Button>
+                </div>
+                
+                <div className="flex items-center justify-between p-4 border rounded-lg">
+                  <div className="flex items-center space-x-3">
+                    <Video className="h-5 w-5 text-slate-600" />
+                    <div>
+                      <p className="font-medium">Video Training</p>
+                      <p className="text-sm text-slate-500">Train your clone's appearance</p>
                     </div>
-                  )}
-                </CardContent>
-              </Card>
+                  </div>
+                  <Button
+                    variant={formData.enableVideo ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => {
+                      console.log('Video toggle clicked, current state:', formData.enableVideo)
+                      setFormData({...formData, enableVideo: !formData.enableVideo})
+                    }}
+                  >
+                    {formData.enableVideo ? "Enabled" : "Enable"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
 
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center space-x-2">
-                    <Video className="h-5 w-5" />
-                    <span>Video Training</span>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <p className="text-sm text-slate-600 dark:text-slate-300">
-                    Upload a 2-3 minute video sample for avatar creation
-                  </p>
-                  <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-lg p-6 text-center">
-                    <Video className="h-8 w-8 text-slate-400 mx-auto mb-2" />
-                    <p className="text-sm font-medium mb-2">Record or Upload Video</p>
-                    <div className="flex space-x-2 justify-center">
-                      <Button variant="outline" size="sm" className="bg-transparent">
-                        Record
-                      </Button>
-                      <Button variant="outline" size="sm" className="bg-transparent">
-                        Upload File
-                      </Button>
-                    </div>
-                  </div>
-                  {formData.videoSample && (
-                    <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                      <div className="flex items-center space-x-2">
-                        <Video className="h-4 w-4 text-slate-500" />
-                        <span className="text-sm">{formData.videoSample.name}</span>
+            {/* Conditional Media Training Sections */}
+            <div className={`grid gap-6 ${formData.enableAudio && formData.enableVideo ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'}`}>
+              {console.log('Rendering conditional sections - Audio:', formData.enableAudio, 'Video:', formData.enableVideo)}
+              {/* Audio Training - Only show if enabled */}
+              {formData.enableAudio && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center space-x-2">
+                      <Mic className="h-5 w-5" />
+                      <span>Voice Training</span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <p className="text-sm text-slate-600 dark:text-slate-300">
+                      Upload a 2-3 minute audio sample to train your clone's voice
+                    </p>
+                    <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-lg p-6 text-center">
+                      <Mic className="h-8 w-8 text-slate-400 mx-auto mb-2" />
+                      <p className="text-sm font-medium mb-2">Record or Upload Audio</p>
+                      <div className="flex space-x-2 justify-center">
+                        <Button variant="outline" size="sm" className="bg-transparent">
+                          Record
+                        </Button>
+                        <Button variant="outline" size="sm" className="bg-transparent">
+                          Upload File
+                        </Button>
                       </div>
                     </div>
-                  )}
-                </CardContent>
-              </Card>
+                    {formData.audioSample && (
+                      <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                        <div className="flex items-center space-x-2">
+                          <Mic className="h-4 w-4 text-slate-500" />
+                          <span className="text-sm">{formData.audioSample.name}</span>
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Video Training - Only show if enabled */}
+              {formData.enableVideo && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center space-x-2">
+                      <Video className="h-5 w-5" />
+                      <span>Video Training</span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <p className="text-sm text-slate-600 dark:text-slate-300">
+                      Upload a 2-3 minute video sample for avatar creation
+                    </p>
+                    <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-lg p-6 text-center">
+                      <Video className="h-8 w-8 text-slate-400 mx-auto mb-2" />
+                      <p className="text-sm font-medium mb-2">Record or Upload Video</p>
+                      <div className="flex space-x-2 justify-center">
+                        <Button variant="outline" size="sm" className="bg-transparent">
+                          Record
+                        </Button>
+                        <Button variant="outline" size="sm" className="bg-transparent">
+                          Upload File
+                        </Button>
+                      </div>
+                    </div>
+                    {formData.videoSample && (
+                      <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                        <div className="flex items-center space-x-2">
+                          <Video className="h-4 w-4 text-slate-500" />
+                          <span className="text-sm">{formData.videoSample.name}</span>
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
             </div>
 
             <Card>
@@ -1450,127 +1660,201 @@ function CloneWizardContent() {
       case 6:
         return (
           <div className="space-y-6">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <Card className="lg:col-span-2">
-                <CardHeader>
-                  <CardTitle className="flex items-center justify-between">
-                    <span>Test Your Clone</span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setIsTestingClone(!isTestingClone)}
-                      className="bg-transparent"
-                    >
-                      {isTestingClone ? "Stop Test" : "Start Test"}
-                    </Button>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {isTestingClone ? (
-                    <div className="space-y-4">
-                      <div className="h-96 border border-slate-200 dark:border-slate-700 rounded-lg p-4 overflow-y-auto">
-                        <div className="space-y-4">
-                          {testMessages.map((message) => (
-                            <div
-                              key={message.id}
-                              className={`flex ${message.sender === "user" ? "justify-end" : "justify-start"}`}
-                            >
-                              <div
-                                className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                                  message.sender === "user"
-                                    ? "bg-blue-500 text-white"
-                                    : "bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white"
-                                }`}
-                              >
-                                <p className="text-sm">{message.content}</p>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="flex space-x-2">
-                        <Input
-                          value={testInput}
-                          onChange={(e) => setTestInput(e.target.value)}
-                          placeholder="Type a message to test your clone..."
-                          onKeyPress={(e) => e.key === "Enter" && handleTestMessage()}
-                        />
-                        <Button onClick={handleTestMessage}>Send</Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="text-center py-12">
-                      <Play className="h-12 w-12 text-slate-400 mx-auto mb-4" />
-                      <p className="text-slate-600 dark:text-slate-300">
-                        Click "Start Test" to begin testing your AI clone
-                      </p>
-                    </div>
-                  )}
+            {/* Clone Status Overview */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Card className="text-center">
+                <CardContent className="pt-6">
+                  <MessageCircle className="h-8 w-8 mx-auto text-blue-600 mb-2" />
+                  <h3 className="font-semibold text-sm">Chat Clone</h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">Text conversations</p>
+                  <div className="mt-2">
+                    <span className="text-xs px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-full">
+                      Ready
+                    </span>
+                  </div>
                 </CardContent>
               </Card>
 
-              <Card>
-                <CardHeader>
-                  <CardTitle>Clone Performance</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm">Knowledge Accuracy</span>
-                      <span className="text-sm font-medium">{formData.testResults.accuracy}%</span>
-                    </div>
-                    <Progress value={formData.testResults.accuracy} />
+              <Card className="text-center">
+                <CardContent className="pt-6">
+                  <Mic className="h-8 w-8 mx-auto text-slate-400 mb-2" />
+                  <h3 className="font-semibold text-sm">Voice Clone</h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">Audio conversations</p>
+                  <div className="mt-2">
+                    <span className="text-xs px-2 py-1 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-full">
+                      {formData.enableAudio ? "Ready" : "Not Enabled"}
+                    </span>
                   </div>
+                </CardContent>
+              </Card>
 
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm">Personality Match</span>
-                      <span className="text-sm font-medium">{formData.testResults.personality}%</span>
-                    </div>
-                    <Progress value={formData.testResults.personality} />
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm">Response Quality</span>
-                      <span className="text-sm font-medium">{formData.testResults.knowledge}%</span>
-                    </div>
-                    <Progress value={formData.testResults.knowledge} />
-                  </div>
-
-                  <div className="pt-4 border-t border-slate-200 dark:border-slate-700">
-                    <div className="flex items-center space-x-2 text-green-600">
-                      <CheckCircle className="h-4 w-4" />
-                      <span className="text-sm font-medium">Ready to Launch</span>
-                    </div>
+              <Card className="text-center">
+                <CardContent className="pt-6">
+                  <Video className="h-8 w-8 mx-auto text-slate-400 mb-2" />
+                  <h3 className="font-semibold text-sm">Video Clone</h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">Video conversations</p>
+                  <div className="mt-2">
+                    <span className="text-xs px-2 py-1 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-full">
+                      {formData.enableVideo ? "Ready" : "Not Enabled"}
+                    </span>
                   </div>
                 </CardContent>
               </Card>
             </div>
 
+            {/* Main Testing Interface */}
             <Card>
               <CardHeader>
-                <CardTitle>Improvement Suggestions</CardTitle>
+                <CardTitle className="flex items-center space-x-2">
+                  <Play className="h-5 w-5" />
+                  <span>Clone Testing</span>
+                </CardTitle>
+                <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">
+                  Test your AI clone with real conversations powered by GPT-5. Your clone will respond using your professional background, credentials, and training data.
+                </p>
               </CardHeader>
               <CardContent>
-                <div className="space-y-3">
-                  <div className="flex items-start space-x-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                    <CheckCircle className="h-5 w-5 text-blue-600 mt-0.5" />
+                {isTestingClone ? (
+                  <div className="space-y-4">
+                    {/* Stop Testing Button */}
+                    <div className="flex justify-end">
+                      <Button
+                        onClick={() => setIsTestingClone(false)}
+                        variant="outline"
+                        size="sm"
+                      >
+                        Stop Testing
+                      </Button>
+                    </div>
+                    
+                    {/* Chat Interface */}
+                    <div className="h-96 border border-slate-200 dark:border-slate-700 rounded-lg p-4 overflow-y-auto bg-slate-50 dark:bg-slate-900/50">
+                      <div className="space-y-4">
+                        {testMessages.map((message) => (
+                          <div
+                            key={message.id}
+                            className={`flex ${message.sender === "user" ? "justify-end" : "justify-start"}`}
+                          >
+                            <div
+                              className={`max-w-[80%] rounded-lg px-4 py-2 ${
+                                message.sender === "user"
+                                  ? "bg-blue-500 text-white"
+                                  : message.id === "typing"
+                                  ? "bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 animate-pulse"
+                                  : "bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm border border-slate-200 dark:border-slate-700"
+                              }`}
+                            >
+                              <p className="text-sm">{message.content}</p>
+                              {message.sender === "clone" && message.id !== "typing" && (
+                                <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                                  {formData.name} • Powered by GPT-5
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    {/* Input Area */}
+                    <div className="flex space-x-2">
+                      <Input
+                        value={testInput}
+                        onChange={(e) => setTestInput(e.target.value)}
+                        placeholder={`Ask ${formData.name || 'your clone'} anything about ${formData.expertise || 'their expertise'}...`}
+                        onKeyPress={(e) => e.key === "Enter" && !e.shiftKey && handleTestMessage()}
+                        className="flex-1"
+                      />
+                      <Button 
+                        onClick={handleTestMessage}
+                        disabled={!testInput.trim()}
+                      >
+                        Send
+                      </Button>
+                    </div>
+                    
+                    {/* Testing Info */}
+                    <div className="text-xs text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 p-3 rounded-lg">
+                      <div className="flex items-center space-x-4">
+                        <span>💡 <strong>Testing Mode:</strong> This uses GPT-5 with your clone's training data</span>
+                        <span>🔒 <strong>Privacy:</strong> Test conversations are not saved</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-16">
+                    <div className="mx-auto w-20 h-20 bg-gradient-to-br from-blue-100 to-blue-200 dark:from-blue-900/30 dark:to-blue-800/30 rounded-full flex items-center justify-center mb-6">
+                      <Play className="h-10 w-10 text-blue-600 ml-1" />
+                    </div>
+                    <h3 className="text-xl font-semibold mb-3">Test Your AI Clone</h3>
+                    <p className="text-slate-600 dark:text-slate-300 mb-8 max-w-md mx-auto">
+                      Start a conversation to see how your AI clone responds using your professional expertise and personality.
+                    </p>
+                    <Button 
+                      onClick={() => setIsTestingClone(true)}
+                      size="lg"
+                      className="px-12 py-3 text-base"
+                    >
+                      <Play className="h-5 w-5 mr-3" />
+                      Start Testing
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Improvement Suggestions */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Optimization Tips</CardTitle>
+                <p className="text-sm text-slate-600 dark:text-slate-300">
+                  Ways to improve your clone's performance
+                </p>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="flex items-start space-x-3 p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+                    <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
                     <div>
-                      <p className="text-sm font-medium">Great personality match!</p>
-                      <p className="text-xs text-slate-600 dark:text-slate-300">
-                        Your clone's responses align well with your defined personality traits.
+                      <p className="text-sm font-medium text-green-800 dark:text-green-200">Great foundation!</p>
+                      <p className="text-xs text-green-700 dark:text-green-300 mt-1">
+                        Your clone has solid training data and personality settings.
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-start space-x-3 p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
-                    <div className="h-5 w-5 bg-yellow-500 rounded-full mt-0.5 flex items-center justify-center">
-                      <span className="text-xs text-white font-bold">!</span>
+                  
+                  <div className="flex items-start space-x-3 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                    <div className="h-5 w-5 bg-blue-500 rounded-full mt-0.5 flex items-center justify-center flex-shrink-0">
+                      <span className="text-xs text-white font-bold">💡</span>
                     </div>
                     <div>
-                      <p className="text-sm font-medium">Consider adding more examples</p>
-                      <p className="text-xs text-slate-600 dark:text-slate-300">
-                        Adding more Q&A examples could improve response accuracy in edge cases.
+                      <p className="text-sm font-medium text-blue-800 dark:text-blue-200">Add more examples</p>
+                      <p className="text-xs text-blue-700 dark:text-blue-300 mt-1">
+                        More Q&A training data can improve response accuracy.
+                      </p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-start space-x-3 p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
+                    <div className="h-5 w-5 bg-yellow-500 rounded-full mt-0.5 flex items-center justify-center flex-shrink-0">
+                      <span className="text-xs text-white font-bold">⚡</span>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">Enable multimedia</p>
+                      <p className="text-xs text-yellow-700 dark:text-yellow-300 mt-1">
+                        Add voice and video for richer interactions.
+                      </p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-start space-x-3 p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-800">
+                    <div className="h-5 w-5 bg-purple-500 rounded-full mt-0.5 flex items-center justify-center flex-shrink-0">
+                      <span className="text-xs text-white font-bold">🎯</span>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-purple-800 dark:text-purple-200">Refine personality</p>
+                      <p className="text-xs text-purple-700 dark:text-purple-300 mt-1">
+                        Adjust personality sliders based on test conversations.
                       </p>
                     </div>
                   </div>
