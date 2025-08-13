@@ -96,9 +96,15 @@ export default function DiscoverPage() {
           query = query.eq('category', selectedCategory)
         }
 
-        // Add search filter
+        // Add search filter with full-text search and LIKE fallback
         if (searchQuery) {
-          query = query.or(`name.ilike.%${searchQuery}%,description.ilike.%${searchQuery}%`)
+          query = query.or(`
+            name.ilike.%${searchQuery}%,
+            bio.ilike.%${searchQuery}%,
+            category.ilike.%${searchQuery}%,
+            professional_title.ilike.%${searchQuery}%,
+            expertise_areas.cs.{${searchQuery}}
+          `)
         }
 
         // Add price range filter
@@ -121,7 +127,7 @@ export default function DiscoverPage() {
         const transformedClones: ExpertData[] = (clonesData || []).map((clone, index) => ({
           id: clone.id,
           name: clone.name,
-          description: clone.description,
+          description: clone.bio || clone.professional_title || 'Expert',
           category: clone.category,
           base_price: clone.base_price,
           avatar_url: clone.avatar_url,
@@ -130,7 +136,7 @@ export default function DiscoverPage() {
           expertise_areas: clone.expertise_areas || [],
           // Transform to match ExpertData interface
           type: clone.category,
-          specialty: clone.description,
+          specialty: clone.professional_title || clone.category,
           sessions: clone.total_sessions || 0,
           rating: clone.average_rating || 0,
           priceFrom: clone.base_price,
@@ -138,7 +144,10 @@ export default function DiscoverPage() {
           avatar: clone.avatar_url || `/placeholder.svg?height=80&width=80`,
           featured: index < 3, // Make first 3 featured
           heroImage: `/placeholder.svg?height=300&width=400&text=${encodeURIComponent(clone.name)}`,
-          credentials: clone.expertise_areas?.slice(0, 3) || ['Expert'],
+          credentials: [
+            ...(clone.expertise_areas?.slice(0, 2) || []),
+            ...(clone.credentials_qualifications ? [clone.credentials_qualifications.split(',')[0].trim()] : ['Expert'])
+          ].slice(0, 3),
           availability: 'online',
         }))
 

@@ -2,6 +2,7 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
+python-dotenv>=1.0.1,<2.0.0
 
 # Pydantic and settings
 pydantic==2.5.0
@@ -36,6 +37,9 @@ redis==5.0.1
 
 # HTTP client
 httpx>=0.24.0,<0.25.0
+
+# RAG service dependencies
+llama-cloud-services==0.6.51
 
 # Logging and monitoring
 structlog==23.2.0

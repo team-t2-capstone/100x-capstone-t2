@@ -122,27 +122,47 @@ export function useCreatorDashboard(creatorId: string, days: number = 30) {
       setLoading(true);
       setError(null);
       
-      // Get creator data from Supabase
+      // Get creator data from Supabase with real analytics
       const { supabase } = await import('@/lib/supabase');
       
-      const [creatorData, clonesData, sessionsData] = await Promise.allSettled([
+      // First get creator's clones to get their IDs
+      const { data: creatorClones } = await supabase
+        .from('clones')
+        .select('id')
+        .eq('creator_id', creatorId);
+
+      const cloneIds = creatorClones?.map(clone => clone.id) || [];
+
+      const [creatorData, clonesData, sessionsData, allSessionsData] = await Promise.allSettled([
         supabase.from('user_profiles').select('*').eq('id', creatorId).single(),
         supabase.from('clones').select('*').eq('creator_id', creatorId).limit(10),
-        supabase.from('sessions').select('*, clones!sessions_clone_id_fkey(name)').eq('user_id', creatorId).order('created_at', { ascending: false }).limit(5)
+        // Recent sessions for this creator's clones
+        supabase.from('sessions')
+          .select('*, clones!sessions_clone_id_fkey(name)')
+          .in('clone_id', cloneIds)
+          .order('created_at', { ascending: false })
+          .limit(5),
+        // All sessions for analytics calculation
+        supabase.from('sessions')
+          .select('total_cost, user_rating, created_at, clone_id, duration_minutes')
+          .in('clone_id', cloneIds)
       ]);
 
-      // Process creator data for analytics
-      if (creatorData.status === 'fulfilled' && creatorData.value.data) {
-        const profile = creatorData.value.data;
-        const mockAnalytics: CreatorAnalytics = {
-          total_earnings: profile.total_spent || 0,
-          total_sessions: 0,
-          average_rating: 0,
-          user_retention_rate: 0,
-          popular_topics: [],
-          monthly_trends: { earnings: [], sessions: [], ratings: [] }
+      // Calculate real analytics from sessions data
+      if (creatorData.status === 'fulfilled' && allSessionsData.status === 'fulfilled') {
+        const allSessions = allSessionsData.value.data || [];
+        
+        const realAnalytics: CreatorAnalytics = {
+          total_earnings: allSessions.reduce((sum, session) => sum + (session.total_cost || 0), 0),
+          total_sessions: allSessions.length,
+          average_rating: allSessions.length > 0 
+            ? allSessions.filter(s => s.user_rating).reduce((sum, s) => sum + s.user_rating, 0) / allSessions.filter(s => s.user_rating).length
+            : 0,
+          user_retention_rate: 0, // Could calculate based on repeat sessions
+          popular_topics: [], // Could derive from session metadata
+          monthly_trends: { earnings: [], sessions: [], ratings: [] } // Could calculate monthly aggregates
         };
-        setAnalytics(mockAnalytics);
+        setAnalytics(realAnalytics);
       }
       
       if (clonesData.status === 'fulfilled' && clonesData.value.data) {

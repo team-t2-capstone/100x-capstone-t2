@@ -30,9 +30,9 @@ export async function POST(request: NextRequest) {
       }
     ]
 
-    // Call OpenAI API with GPT-5 (latest flagship model)
+    // Call OpenAI API with available model
     const completion = await openai.chat.completions.create({
-      model: 'gpt-5', // Use GPT-5 for best performance and quality
+      model: 'gpt-4o-mini', // Use available model
       messages,
       max_tokens: 1000, // Increased for better responses
       temperature: 0.7,

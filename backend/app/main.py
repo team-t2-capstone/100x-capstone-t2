@@ -19,6 +19,9 @@ from app.config import settings, validate_settings
 from app.database import init_database, close_database, test_all_connections, db_manager
 from app.core.security import get_security_headers
 
+# Import RAG services (direct integration)
+# from app.services.rag_client import initialize_rag_client  # No longer needed with direct integration
+
 # Import API routers
 from app.api import clones, knowledge, users, discovery, rag, sessions, chat, memory, summarization, analytics, billing, ai_chat, chat_websocket, webrtc, voice_video_calls
 
@@ -76,9 +79,8 @@ async def lifespan(app: FastAPI):
         # await init_redis()
         logger.info("Redis connection ready")
         
-        # Initialize OpenAI client (will be implemented later)
-        # await init_openai()
-        logger.info("OpenAI client initialized")
+        # Initialize RAG service (direct integration - no initialization needed)
+        logger.info("RAG service ready (direct integration)")
         
         logger.info("All services initialized successfully")
         
@@ -211,11 +213,20 @@ async def detailed_health_check() -> Dict[str, Any]:
             "message": f"Supabase client error: {str(e)}"
         }
     
-    # Check OpenAI API (placeholder)
-    health_status["services"]["openai"] = {
-        "status": "configured",
-        "message": "OpenAI API key configured"
-    }
+    # Check RAG service (direct integration)
+    try:
+        # For direct integration, check if OpenAI API key is configured
+        from app.config import settings
+        openai_configured = bool(settings.OPENAI_API_KEY)
+        health_status["services"]["rag"] = {
+            "status": "healthy" if openai_configured else "configured",
+            "message": "RAG service ready (direct integration)" if openai_configured else "RAG service configured but OpenAI API key needed"
+        }
+    except Exception as e:
+        health_status["services"]["rag"] = {
+            "status": "unhealthy",
+            "message": f"RAG service check failed: {str(e)}"
+        }
     
     # Check Redis (placeholder)
     health_status["services"]["redis"] = {

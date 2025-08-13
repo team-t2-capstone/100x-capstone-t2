@@ -14,9 +14,11 @@ interface CloneCreateRequest {
   communication_style?: Record<string, any>;
   languages: string[];
 }
-import { uploadDocument, createKnowledgeEntry, processUrl } from '@/lib/knowledge-api'
+// Removed complex knowledge-api - now using direct Supabase operations
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/auth-context'
+import { getAuthTokens } from '@/lib/api-client'
+import { setupStorageBuckets, checkStorageBuckets } from '@/lib/setup-storage'
 import { toast } from '@/components/ui/use-toast'
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -126,6 +128,11 @@ function CloneWizardContent() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [createdCloneId, setCreatedCloneId] = useState<string | null>(null)
+
+  // RAG processing state
+  const [isProcessingKnowledge, setIsProcessingKnowledge] = useState(false)
+  const [knowledgeProcessingStatus, setKnowledgeProcessingStatus] = useState<string>('pending')
+  const [processingProgress, setProcessingProgress] = useState<{ completed: number; total: number; errors: string[] }>({ completed: 0, total: 0, errors: [] })
   const [formData, setFormData] = useState({
     // Step 1: Basic Information
     name: "",
@@ -469,9 +476,57 @@ INSTRUCTIONS:
     return systemPrompt
   }
 
-  // Test clone with OpenAI API
+  // Test clone with OpenAI API or RAG
   const testCloneWithAI = async (userMessage: string) => {
     try {
+      // Check if we should use RAG or fallback to basic OpenAI
+      if (createdCloneId && knowledgeProcessingStatus === 'completed' && (formData.documents.length > 0 || formData.links.length > 0)) {
+        console.log('Using RAG-powered testing for clone:', createdCloneId)
+        
+        // Use RAG endpoint for enhanced responses
+        const response = await fetch(`/api/clones/${createdCloneId}/query`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${getAuthTokens().accessToken}`,
+          },
+          body: JSON.stringify({
+            query: userMessage,
+            memory_type: 'expert'
+          })
+        })
+
+        console.log('RAG clone query response status:', response.status, response.statusText)
+        
+        if (response.ok) {
+          const responseText = await response.text()
+          console.log('RAG clone query response text:', responseText)
+          
+          let data;
+          try {
+            data = JSON.parse(responseText)
+            console.log('RAG response:', data)
+          } catch (parseError) {
+            console.error('Failed to parse RAG response:', parseError)
+            return "I'm sorry, I received an invalid response from the server."
+          }
+          
+          // Return the RAG response with citation info if available
+          let responseMessage = data.response || "I'm sorry, I couldn't process that question."
+          
+          if (data.citations && data.citations.length > 0) {
+            responseMessage += '\n\n📚 *Based on your uploaded knowledge materials*'
+          }
+          
+          return responseMessage
+        } else {
+          console.warn('RAG endpoint failed, falling back to basic OpenAI')
+        }
+      }
+      
+      // Fallback to basic OpenAI API
+      console.log('Using basic OpenAI testing (no RAG knowledge available)')
+      
       const systemPrompt = generateSystemPrompt()
       
       console.log('System Prompt:', systemPrompt)
@@ -492,16 +547,303 @@ INSTRUCTIONS:
         })
       })
 
+      console.log('Clone query response status:', response.status, response.statusText)
+      
       if (!response.ok) {
-        throw new Error(`API Error: ${response.status}`)
+        const errorText = await response.text()
+        console.log('Clone query error response:', errorText)
+        
+        try {
+          const errorData = JSON.parse(errorText)
+          throw new Error(errorData.error || `API Error: ${response.status}`)
+        } catch (parseError) {
+          throw new Error(`API Error ${response.status}: ${errorText.substring(0, 200)}`)
+        }
       }
 
-      const data = await response.json()
-      return data.response
+      const responseText = await response.text()
+      console.log('Clone query success response:', responseText)
+      
+      try {
+        const data = JSON.parse(responseText)
+        return data.response
+      } catch (parseError) {
+        console.error('Failed to parse clone query response:', parseError)
+        throw new Error('Invalid response from server')
+      }
 
     } catch (error) {
       console.error('Error testing clone:', error)
       return "I'm sorry, I'm having trouble responding right now. Please try again later."
+    }
+  }
+
+  // RAG Knowledge Processing Function
+  const processKnowledgeWithRAG = async (cloneId: string) => {
+    if (formData.documents.length === 0 && formData.links.length === 0) {
+      console.log('No documents or links to process')
+      return
+    }
+
+    try {
+      setIsProcessingKnowledge(true)
+      setKnowledgeProcessingStatus('processing')
+      setProcessingProgress({ completed: 0, total: formData.documents.length + formData.links.length, errors: [] })
+
+      console.log('Starting RAG processing for clone:', cloneId)
+      console.log('Clone ID type:', typeof cloneId)
+      console.log('Clone ID length:', cloneId?.length)
+      console.log('Clone ID is valid UUID:', /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cloneId))
+
+      // Check if required tables exist before proceeding
+      const tablesExist = await ensureTablesExist()
+      if (!tablesExist) {
+        throw new Error('Required database tables are missing. Please contact support to run migrations.')
+      }
+
+      // Ensure domain exists for the clone's category
+      const cloneDomain = formData.expertise === 'other' ? formData.customDomain : formData.expertise
+      const { error: domainError } = await supabase.from('domains').upsert({
+        domain_name: cloneDomain,
+        expert_names: []
+      }, { onConflict: 'domain_name' })
+
+      if (domainError) {
+        console.warn('Failed to create/update domain:', domainError)
+      }
+
+      // Prepare document URLs by uploading files first
+      const processedDocuments = []
+      const processedLinks = []
+
+      // Process uploaded documents
+      for (let i = 0; i < formData.documents.length; i++) {
+        const doc = formData.documents[i]
+        try {
+          // Upload document to Supabase Storage first
+          const fileUrl = await uploadFile(doc, 'knowledge-documents', 'clone-documents')
+          if (fileUrl) {
+            // Store document metadata in knowledge table
+            const { error: knowledgeError } = await supabase.from('knowledge').insert({
+              clone_id: cloneId,
+              title: doc.name,
+              description: `Uploaded document: ${doc.name}`,
+              content_type: 'document',
+              file_name: doc.name,
+              file_url: fileUrl,
+              file_type: doc.type,
+              file_size_bytes: doc.size,
+              content_preview: '', // Could extract first 500 chars if needed
+              tags: ['training_material'],
+              vector_store_status: 'pending' // Will be processed by OpenAI later
+            })
+
+            if (knowledgeError) {
+              console.error('Failed to store document in knowledge table:', knowledgeError)
+            }
+
+            // Also store in documents table for RAG processing
+            const { error: docError } = await supabase.from('documents').insert({
+              name: doc.name,
+              document_link: fileUrl,
+              created_by: user?.id,
+              domain: cloneDomain,
+              included_in_default: false,
+              client_name: formData.name // Use clone name as client name
+            })
+
+            if (docError) {
+              console.error('Failed to store document in documents table:', docError)
+            } else {
+              console.log(`Document ${doc.name} stored in documents table successfully`)
+            }
+
+            processedDocuments.push({
+              name: doc.name,
+              url: fileUrl,
+              type: 'document'
+            })
+            console.log(`Document ${doc.name} uploaded successfully:`, fileUrl)
+          }
+          setProcessingProgress(prev => ({ ...prev, completed: prev.completed + 1 }))
+        } catch (error) {
+          console.error(`Failed to upload document ${doc.name}:`, error)
+          setProcessingProgress(prev => ({ 
+            ...prev, 
+            completed: prev.completed + 1,
+            errors: [...prev.errors, `Failed to upload ${doc.name}`]
+          }))
+        }
+      }
+
+      // Process links
+      for (const link of formData.links) {
+        try {
+          // Store URL metadata in knowledge table
+          const { error: knowledgeError } = await supabase.from('knowledge').insert({
+            clone_id: cloneId,
+            title: `Content from ${new URL(link).hostname}`,
+            description: `Web content from: ${link}`,
+            content_type: 'link',
+            original_url: link,
+            file_url: link, // Same as original for links
+            content_preview: '', // Could fetch and preview if needed
+            tags: ['web_content'],
+            vector_store_status: 'pending' // Will be processed by OpenAI later
+          })
+
+          if (knowledgeError) {
+            console.error('Failed to store URL in knowledge table:', knowledgeError)
+          }
+
+          // Also store in documents table for RAG processing
+          const { error: docError } = await supabase.from('documents').insert({
+            name: `Web Content: ${new URL(link).hostname}`,
+            document_link: link,
+            created_by: user?.id,
+            domain: cloneDomain,
+            included_in_default: false,
+            client_name: formData.name // Use clone name as client name
+          })
+
+          if (docError) {
+            console.error('Failed to store URL in documents table:', docError)
+          } else {
+            console.log(`Link ${link} stored in documents table successfully`)
+          }
+
+          processedLinks.push({
+            name: link.split('/').pop() || 'Web Link',
+            url: link,
+            type: 'link'
+          })
+        } catch (error) {
+          console.error(`Failed to process link ${link}:`, error)
+        }
+        setProcessingProgress(prev => ({ ...prev, completed: prev.completed + 1 }))
+      }
+
+      // Create or update expert for this clone
+      if (processedDocuments.length > 0 || processedLinks.length > 0) {
+        const expertName = formData.name || 'Unnamed Expert'
+        const expertContext = `Expert specializing in ${cloneDomain}. ${formData.bio || ''}\n\nExpertise areas: ${formData.expertiseAreas?.join(', ') || 'General'}\n\nPersonality: ${JSON.stringify(formData.personality, null, 2)}`
+
+        const { error: expertError } = await supabase.from('experts').upsert({
+          name: expertName,
+          domain: cloneDomain,
+          context: expertContext
+        }, { onConflict: 'name' })
+
+        if (expertError) {
+          console.error('Failed to create/update expert:', expertError)
+        } else {
+          console.log('Expert created/updated successfully:', expertName)
+          
+          // Update domain to include this expert
+          const { data: domainData } = await supabase.from('domains')
+            .select('expert_names')
+            .eq('domain_name', cloneDomain)
+            .single()
+
+          if (domainData) {
+            const currentExperts = domainData.expert_names || []
+            if (!currentExperts.includes(expertName)) {
+              const { error: updateError } = await supabase.from('domains')
+                .update({ expert_names: [...currentExperts, expertName] })
+                .eq('domain_name', cloneDomain)
+
+              if (updateError) {
+                console.error('Failed to update domain experts:', updateError)
+              }
+            }
+          }
+        }
+      }
+
+      // Prepare RAG processing request
+      const ragRequest = {
+        documents: processedDocuments,
+        links: processedLinks
+      }
+
+      console.log('Sending RAG processing request:', ragRequest)
+
+      // Wait a moment to ensure database transaction is committed
+      console.log('Waiting 2 seconds for database consistency...')
+      await new Promise(resolve => setTimeout(resolve, 2000))
+
+      // Call RAG processing endpoint
+      const response = await fetch(`/api/clones/${cloneId}/process-knowledge`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getAuthTokens().accessToken}`,
+        },
+        body: JSON.stringify(ragRequest),
+      })
+
+      console.log('RAG processing response status:', response.status, response.statusText)
+      console.log('RAG processing response headers:', Object.fromEntries(response.headers.entries()))
+      
+      if (!response.ok) {
+        let errorData;
+        const responseText = await response.text()
+        console.log('RAG processing error response text:', responseText)
+        
+        try {
+          errorData = JSON.parse(responseText)
+        } catch (parseError) {
+          console.error('Failed to parse error response as JSON:', parseError)
+          throw new Error(`RAG processing failed with ${response.status}: ${responseText.substring(0, 200)}${responseText.length > 200 ? '...' : ''}`)
+        }
+        
+        throw new Error(errorData.detail || errorData.error || `RAG processing failed: ${response.status}`)
+      }
+
+      let result;
+      const responseText = await response.text()
+      console.log('RAG processing success response text:', responseText)
+      
+      try {
+        result = JSON.parse(responseText)
+        console.log('RAG processing result:', result)
+      } catch (parseError) {
+        console.error('Failed to parse success response as JSON:', parseError)
+        throw new Error(`Server returned invalid JSON: ${responseText.substring(0, 200)}${responseText.length > 200 ? '...' : ''}`)
+      }
+
+      if (result.overall_status === 'completed') {
+        setKnowledgeProcessingStatus('completed')
+        toast({
+          title: "Knowledge Processing Complete",
+          description: "Your documents have been successfully processed and integrated into your clone.",
+        })
+      } else if (result.overall_status === 'failed') {
+        throw new Error(result.error_message || 'Knowledge processing failed')
+      } else {
+        setKnowledgeProcessingStatus('partial')
+        toast({
+          title: "Partial Processing Complete",
+          description: "Some documents were processed successfully. Check the status for details.",
+          variant: "destructive",
+        })
+      }
+
+    } catch (error) {
+      console.error('RAG processing error:', error)
+      setKnowledgeProcessingStatus('failed')
+      setProcessingProgress(prev => ({ 
+        ...prev, 
+        errors: [...prev.errors, error instanceof Error ? error.message : 'Unknown error']
+      }))
+      
+      toast({
+        title: "Knowledge Processing Failed",
+        description: error instanceof Error ? error.message : "Failed to process knowledge documents",
+        variant: "destructive",
+      })
+    } finally {
+      setIsProcessingKnowledge(false)
     }
   }
 
@@ -620,12 +962,85 @@ INSTRUCTIONS:
     }
   }
 
+  // Helper function to check if required tables exist and create them if missing
+  const ensureTablesExist = async () => {
+    try {
+      console.log('Checking if required database tables exist...')
+      
+      // Check if documents table exists by attempting a simple query
+      const { data: documentsTest, error: documentsError } = await supabase
+        .from('documents')
+        .select('id')
+        .limit(1)
+      
+      // Check if domains table exists
+      const { data: domainsTest, error: domainsError } = await supabase
+        .from('domains')
+        .select('id')
+        .limit(1)
+      
+      // Check if experts table exists
+      const { data: expertsTest, error: expertsError } = await supabase
+        .from('experts')
+        .select('id')
+        .limit(1)
+      
+      const missingTables = []
+      if (documentsError) {
+        console.error('Documents table issue:', documentsError.message)
+        missingTables.push('documents')
+      }
+      if (domainsError) {
+        console.error('Domains table issue:', domainsError.message)
+        missingTables.push('domains')
+      }
+      if (expertsError) {
+        console.error('Experts table issue:', expertsError.message)
+        missingTables.push('experts')
+      }
+      
+      if (missingTables.length > 0) {
+        console.warn(`Missing tables: ${missingTables.join(', ')}`)
+        toast({
+          title: "Database Setup Required",
+          description: `Missing database tables: ${missingTables.join(', ')}. Please contact support to run migrations.`,
+          variant: "destructive"
+        })
+        return false
+      }
+      
+      console.log('All required tables exist')
+      return true
+    } catch (error) {
+      console.error('Error checking database tables:', error)
+      return false
+    }
+  }
+
   // Upload file to Supabase Storage
   const uploadFile = async (file: File, bucket: string, folder: string): Promise<string | null> => {
     try {
+      // Check if storage buckets exist, create them if needed
+      const { allExist } = await checkStorageBuckets()
+      if (!allExist) {
+        console.log('Storage buckets missing, creating them...')
+        const setupResult = await setupStorageBuckets()
+        if (!setupResult.success) {
+          console.error('Failed to setup storage buckets:', setupResult.error)
+          toast({
+            title: "Storage Setup Error",
+            description: "Failed to setup file storage. Please contact support.",
+            variant: "destructive"
+          })
+          return null
+        }
+      }
+
       const fileExt = file.name.split('.').pop()
       const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`
-      const filePath = `${folder}/${fileName}`
+      // Include user ID in path for RLS policy compatibility
+      const userId = user?.id || 'anonymous'
+      const filePath = `${userId}/${folder}/${fileName}`
 
       // Upload with upsert to handle overwriting
       const { error } = await supabase.storage
@@ -634,7 +1049,24 @@ INSTRUCTIONS:
 
       if (error) {
         console.error('Upload error:', error)
-        return null
+        
+        // If bucket still doesn't exist, try to create it once more
+        if (error.message.includes('Bucket not found')) {
+          console.log('Bucket not found, attempting to create it...')
+          await setupStorageBuckets()
+          
+          // Retry the upload
+          const { error: retryError } = await supabase.storage
+            .from(bucket)
+            .upload(filePath, file, { upsert: true })
+          
+          if (retryError) {
+            console.error('Retry upload error:', retryError)
+            return null
+          }
+        } else {
+          return null
+        }
       }
 
       // Get public URL - this should work for public buckets
@@ -699,7 +1131,61 @@ INSTRUCTIONS:
     
     if (currentStep < steps.length) {
       // Save progress before moving to next step
-      await saveProgress()
+      const currentCloneId = await saveProgress()
+      
+      // Ensure clone was created before processing knowledge
+      if (!currentCloneId) {
+        console.error('Clone ID not available after saveProgress()')
+        toast({
+          title: "Setup Error",
+          description: "Please complete the basic information first and try again.",
+          variant: "destructive"
+        })
+        return
+      }
+      
+      // Special handling for Step 3 (Knowledge Transfer) - trigger RAG processing
+      if (currentStep === 3 && (formData.documents.length > 0 || formData.links.length > 0)) {
+        try {
+          // Verify clone exists before processing knowledge
+          console.log('Verifying clone exists before RAG processing...')
+          const { data: cloneExists, error: cloneCheckError } = await supabase
+            .from('clones')
+            .select('id, name')
+            .eq('id', currentCloneId)
+            .single()
+          
+          if (cloneCheckError || !cloneExists) {
+            console.error('Clone verification failed:', cloneCheckError)
+            toast({
+              title: "Clone verification failed",
+              description: "Please try saving the clone again before processing knowledge.",
+              variant: "destructive"
+            })
+            return
+          }
+          
+          console.log('Clone verified, proceeding with RAG processing:', cloneExists)
+          
+          // Process knowledge in background - don't block navigation
+          processKnowledgeWithRAG(currentCloneId).catch(error => {
+            console.error('Background RAG processing failed:', error)
+          })
+          
+          toast({
+            title: "Processing Knowledge in Background",
+            description: "Your documents are being processed. You can continue with the setup.",
+          })
+        } catch (error) {
+          console.error('Failed to start RAG processing:', error)
+          toast({
+            title: "Processing Warning",
+            description: "Could not start knowledge processing, but you can continue with setup.",
+            variant: "destructive",
+          })
+        }
+      }
+      
       setCurrentStep(currentStep + 1)
     }
   }
@@ -710,20 +1196,23 @@ INSTRUCTIONS:
     }
   }
 
-  const saveProgress = async () => {
+  const saveProgress = async (): Promise<string | null> => {
     try {
       setIsSubmitting(true)
       
       // Upload photo if exists
       let avatarUrl = null
       if (formData.photo) {
-        avatarUrl = await uploadFile(formData.photo, 'avatars', 'clone-avatars')
+        console.log('Uploading avatar photo...')
+        avatarUrl = await uploadFile(formData.photo, 'clone-avatars', 'avatars')
         if (!avatarUrl) {
           toast({
             title: "Photo upload failed",
             description: "Continuing without photo upload",
             variant: "destructive",
           })
+        } else {
+          console.log('Avatar uploaded successfully to:', avatarUrl)
         }
       }
       
@@ -780,16 +1269,28 @@ INSTRUCTIONS:
         if (clone) {
           setCreatedCloneId(clone.id)
           
+          // Update formData with the new avatar URL if uploaded
+          if (avatarUrl) {
+            console.log('Updating formData with new avatar URL:', avatarUrl)
+            setFormData(prev => ({
+              ...prev,
+              photo: null, // Clear the file object
+              existingAvatarUrl: avatarUrl // Set the uploaded URL
+            }))
+          }
+          
           // Save Q&A data if there are responses
           if (Object.keys(formData.qaResponses).length > 0) {
             await saveQAResponses(clone.id, formData.qaResponses)
           }
+          
+          toast({
+            title: "Progress saved",
+            description: "Clone created and progress saved",
+          })
+          
+          return clone.id  // Return the new clone ID
         }
-        
-        toast({
-          title: "Progress saved",
-          description: "Clone created and progress saved",
-        })
       } else {
         // Update existing clone
         const updateData = {
@@ -837,6 +1338,16 @@ INSTRUCTIONS:
           throw new Error(`Failed to update clone: ${error.message}`)
         }
         
+        // Update formData with the new avatar URL if uploaded
+        if (avatarUrl) {
+          console.log('Updating formData with new avatar URL:', avatarUrl)
+          setFormData(prev => ({
+            ...prev,
+            photo: null, // Clear the file object
+            existingAvatarUrl: avatarUrl // Set the uploaded URL
+          }))
+        }
+        
         // Save Q&A data if there are responses
         if (Object.keys(formData.qaResponses).length > 0) {
           await saveQAResponses(createdCloneId, formData.qaResponses)
@@ -846,7 +1357,11 @@ INSTRUCTIONS:
           title: "Progress saved",
           description: "Clone updated successfully",
         })
+        
+        return createdCloneId  // Return existing clone ID
       }
+      
+      return null  // No clone ID available
     } catch (error) {
       console.error('Save error:', error)
       toast({
@@ -854,6 +1369,7 @@ INSTRUCTIONS:
         description: error instanceof Error ? error.message : "Failed to save progress",
         variant: "destructive",
       })
+      return null
     } finally {
       setIsSubmitting(false)
     }
@@ -883,27 +1399,9 @@ INSTRUCTIONS:
 
       await Promise.all(qaPromises)
 
-      // Process uploaded documents
-      if (formData.documents.length > 0) {
-        const docPromises = formData.documents.map(doc =>
-          uploadDocument(createdCloneId!, {
-            file: doc,
-            title: doc.name,
-            tags: ['training_material'],
-          })
-        )
-        
-        await Promise.all(docPromises)
-      }
-
-      // Process URLs
-      if (formData.links.length > 0) {
-        const urlPromises = formData.links.map(url =>
-          processUrl(createdCloneId!, url)
-        )
-        
-        await Promise.all(urlPromises)
-      }
+      // Documents and URLs are now processed in the knowledge transfer step (step 3)
+      // This avoids duplicate storage and ensures they're available for RAG processing immediately
+      console.log('Document processing handled in knowledge transfer step')
 
       toast({
         title: "Clone created successfully!",
@@ -1091,17 +1589,14 @@ INSTRUCTIONS:
                             : (formData.existingAvatarUrl && formData.existingAvatarUrl.trim() !== "") 
                               ? formData.existingAvatarUrl 
                               : "/placeholder.svg"
-                        } 
+                        }
                         onError={(e) => {
-                          console.error('Avatar image failed to load:', formData.existingAvatarUrl)
-                          console.error('Trying to load URL:', e.currentTarget.src)
-                          // Fallback to placeholder on error
-                          e.currentTarget.src = "/placeholder.svg"
+                          console.error('Avatar image failed to load:', e.currentTarget.src)
+                          console.log('formData.photo:', !!formData.photo)
+                          console.log('formData.existingAvatarUrl:', formData.existingAvatarUrl)
                         }}
                         onLoad={() => {
-                          if (formData.existingAvatarUrl) {
-                            console.log('Avatar loaded successfully:', formData.existingAvatarUrl)
-                          }
+                          console.log('Avatar image loaded successfully:', formData.existingAvatarUrl)
                         }}
                       />
                       <AvatarFallback>
@@ -1400,6 +1895,108 @@ INSTRUCTIONS:
                 </Card>
               </TabsContent>
             </Tabs>
+
+            {/* RAG Processing Status */}
+            {(formData.documents.length > 0 || formData.links.length > 0) && (
+              <Card className="mt-6">
+                <CardHeader>
+                  <CardTitle className="flex items-center space-x-2">
+                    <span>Knowledge Processing Status</span>
+                    {isProcessingKnowledge && (
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
+                    )}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    {/* Status Message */}
+                    <div className="flex items-center space-x-2">
+                      {knowledgeProcessingStatus === 'pending' && (
+                        <>
+                          <div className="h-2 w-2 bg-gray-400 rounded-full"></div>
+                          <span className="text-sm text-gray-600 dark:text-gray-300">
+                            Ready to process when you click "Next"
+                          </span>
+                        </>
+                      )}
+                      {knowledgeProcessingStatus === 'processing' && (
+                        <>
+                          <div className="h-2 w-2 bg-blue-500 rounded-full animate-pulse"></div>
+                          <span className="text-sm text-blue-600 dark:text-blue-300">
+                            Processing your documents and links...
+                          </span>
+                        </>
+                      )}
+                      {knowledgeProcessingStatus === 'completed' && (
+                        <>
+                          <div className="h-2 w-2 bg-green-500 rounded-full"></div>
+                          <span className="text-sm text-green-600 dark:text-green-300">
+                            Knowledge processing completed successfully!
+                          </span>
+                        </>
+                      )}
+                      {knowledgeProcessingStatus === 'failed' && (
+                        <>
+                          <div className="h-2 w-2 bg-red-500 rounded-full"></div>
+                          <span className="text-sm text-red-600 dark:text-red-300">
+                            Processing failed. You can continue and retry later.
+                          </span>
+                        </>
+                      )}
+                      {knowledgeProcessingStatus === 'partial' && (
+                        <>
+                          <div className="h-2 w-2 bg-yellow-500 rounded-full"></div>
+                          <span className="text-sm text-yellow-600 dark:text-yellow-300">
+                            Some documents processed successfully.
+                          </span>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Progress Bar (only during processing) */}
+                    {isProcessingKnowledge && processingProgress.total > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-sm">
+                          <span>Progress</span>
+                          <span>{processingProgress.completed}/{processingProgress.total}</span>
+                        </div>
+                        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                          <div 
+                            className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                            style={{ width: `${(processingProgress.completed / processingProgress.total) * 100}%` }}
+                          ></div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Error Messages */}
+                    {processingProgress.errors.length > 0 && (
+                      <div className="mt-3 p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                        <p className="text-sm font-medium text-red-800 dark:text-red-200 mb-2">Processing Errors:</p>
+                        <ul className="text-sm text-red-700 dark:text-red-300 space-y-1">
+                          {processingProgress.errors.map((error, index) => (
+                            <li key={index}>• {error}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Processing Info */}
+                    <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg">
+                      <p className="text-sm text-blue-800 dark:text-blue-200">
+                        <strong>What happens during processing:</strong>
+                      </p>
+                      <ul className="text-sm text-blue-700 dark:text-blue-300 mt-1 space-y-1">
+                        <li>• Documents are uploaded and analyzed</li>
+                        <li>• Content is processed using advanced AI</li>
+                        <li>• Knowledge is integrated into your clone's expertise</li>
+                        <li>• You can continue setup while processing runs in background</li>
+                      </ul>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </div>
         )
 
@@ -1775,9 +2372,22 @@ INSTRUCTIONS:
                     
                     {/* Testing Info */}
                     <div className="text-xs text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 p-3 rounded-lg">
-                      <div className="flex items-center space-x-4">
-                        <span>💡 <strong>Testing Mode:</strong> This uses GPT-5 with your clone's training data</span>
+                      <div className="flex items-center space-x-4 flex-wrap">
+                        <span>💡 <strong>Testing Mode:</strong> {
+                          createdCloneId && knowledgeProcessingStatus === 'completed' && (formData.documents.length > 0 || formData.links.length > 0)
+                            ? 'RAG-enhanced responses with your knowledge base'
+                            : 'GPT-4 with your clone\'s basic training data'
+                        }</span>
                         <span>🔒 <strong>Privacy:</strong> Test conversations are not saved</span>
+                        {knowledgeProcessingStatus === 'completed' && (formData.documents.length > 0 || formData.links.length > 0) && (
+                          <span>📚 <strong>Knowledge:</strong> Enhanced with your documents</span>
+                        )}
+                        {knowledgeProcessingStatus === 'processing' && (
+                          <span>⏳ <strong>Processing:</strong> Knowledge integration in progress</span>
+                        )}
+                        {knowledgeProcessingStatus === 'failed' && (
+                          <span>⚠️ <strong>Warning:</strong> Knowledge processing failed, using basic mode</span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -2035,6 +2645,131 @@ INSTRUCTIONS:
                 </div>
               </CardContent>
             </Card>
+
+            {/* RAG Knowledge Status */}
+            {(formData.documents.length > 0 || formData.links.length > 0) && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Knowledge Integration Status</CardTitle>
+                  <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">
+                    Status of your uploaded knowledge materials
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between p-4 rounded-lg border">
+                      <div className="flex items-center space-x-3">
+                        {knowledgeProcessingStatus === 'completed' && (
+                          <>
+                            <div className="h-3 w-3 bg-green-500 rounded-full"></div>
+                            <div>
+                              <p className="font-medium text-green-800 dark:text-green-200">Knowledge Integration Complete</p>
+                              <p className="text-sm text-green-600 dark:text-green-400">
+                                Your clone has access to {formData.documents.length} documents and {formData.links.length} links
+                              </p>
+                            </div>
+                          </>
+                        )}
+                        {knowledgeProcessingStatus === 'processing' && (
+                          <>
+                            <div className="h-3 w-3 bg-blue-500 rounded-full animate-pulse"></div>
+                            <div>
+                              <p className="font-medium text-blue-800 dark:text-blue-200">Processing Knowledge</p>
+                              <p className="text-sm text-blue-600 dark:text-blue-400">
+                                Integration in progress... Your clone will be enhanced once complete.
+                              </p>
+                            </div>
+                          </>
+                        )}
+                        {knowledgeProcessingStatus === 'failed' && (
+                          <>
+                            <div className="h-3 w-3 bg-red-500 rounded-full"></div>
+                            <div>
+                              <p className="font-medium text-red-800 dark:text-red-200">Knowledge Processing Failed</p>
+                              <p className="text-sm text-red-600 dark:text-red-400">
+                                Your clone will work with basic training only. You can retry after launch.
+                              </p>
+                            </div>
+                          </>
+                        )}
+                        {knowledgeProcessingStatus === 'partial' && (
+                          <>
+                            <div className="h-3 w-3 bg-yellow-500 rounded-full"></div>
+                            <div>
+                              <p className="font-medium text-yellow-800 dark:text-yellow-200">Partial Integration</p>
+                              <p className="text-sm text-yellow-600 dark:text-yellow-400">
+                                Some knowledge materials were integrated successfully.
+                              </p>
+                            </div>
+                          </>
+                        )}
+                        {knowledgeProcessingStatus === 'pending' && (
+                          <>
+                            <div className="h-3 w-3 bg-gray-400 rounded-full"></div>
+                            <div>
+                              <p className="font-medium text-gray-800 dark:text-gray-200">Knowledge Pending</p>
+                              <p className="text-sm text-gray-600 dark:text-gray-400">
+                                Knowledge materials are ready to process.
+                              </p>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      
+                      {knowledgeProcessingStatus === 'failed' && createdCloneId && (
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => processKnowledgeWithRAG(createdCloneId)}
+                          disabled={isProcessingKnowledge}
+                        >
+                          {isProcessingKnowledge ? 'Retrying...' : 'Retry Processing'}
+                        </Button>
+                      )}
+                    </div>
+
+                    {/* Knowledge Summary */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {formData.documents.length > 0 && (
+                        <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                          <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">📄 Documents</h4>
+                          <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
+                            {formData.documents.slice(0, 3).map((doc, index) => (
+                              <li key={index} className="truncate">• {doc.name}</li>
+                            ))}
+                            {formData.documents.length > 3 && (
+                              <li className="text-blue-600 dark:text-blue-300">• +{formData.documents.length - 3} more documents</li>
+                            )}
+                          </ul>
+                        </div>
+                      )}
+                      
+                      {formData.links.length > 0 && (
+                        <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
+                          <h4 className="font-medium text-green-900 dark:text-green-100 mb-2">🔗 Links</h4>
+                          <ul className="text-sm text-green-800 dark:text-green-200 space-y-1">
+                            {formData.links.slice(0, 3).map((link, index) => (
+                              <li key={index} className="truncate">• {new URL(link).hostname}</li>
+                            ))}
+                            {formData.links.length > 3 && (
+                              <li className="text-green-600 dark:text-green-300">• +{formData.links.length - 3} more links</li>
+                            )}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+
+                    {knowledgeProcessingStatus === 'completed' && (
+                      <div className="bg-green-50 dark:bg-green-900/20 p-3 rounded-lg">
+                        <p className="text-sm text-green-800 dark:text-green-200">
+                          🎉 <strong>Great!</strong> Your clone now has advanced knowledge capabilities and can provide more accurate, context-aware responses based on your uploaded materials.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             <Card>
               <CardHeader>

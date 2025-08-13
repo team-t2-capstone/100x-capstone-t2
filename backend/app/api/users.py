@@ -11,14 +11,12 @@ from fastapi import (
     APIRouter, Depends, HTTPException, status, UploadFile, 
     File, Query, BackgroundTasks
 )
+# Import AsyncSession for type annotations only
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, func, desc, or_
-from sqlalchemy.orm import selectinload
 import structlog
 
 from app.core.security import get_current_user_id
-from app.database import get_db_session, get_supabase
-from app.models.database import UserProfile, Clone, Session, UserAnalytics
+from app.database import get_supabase, get_db_session
 from app.models.schemas import (
     UserProfile as UserProfileSchema, UserUpdate, 
     UserAnalytics as UserAnalyticsSchema

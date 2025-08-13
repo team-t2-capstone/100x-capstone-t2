@@ -365,17 +365,29 @@ async def search_knowledge_base(
                    query=search_request.query,
                    clone_id=getattr(search_request, 'clone_id', 'unknown'))
         
-        # Import RAG processor at function level to avoid circular imports
-        from app.services.rag_processor import rag_processor
+        # Import RAG workflow for direct integration
+        from app.services.rag_workflow import rag_workflow
         
-        # Use the RAG processor to search the knowledge base with embeddings
-        search_results = await rag_processor.search_knowledge_base(
+        # Use the RAG workflow to search the knowledge base
+        rag_response = await rag_workflow.query_clone_expert(
             clone_id=getattr(search_request, 'clone_id', None) or 'default',
-            query=search_request.query,
-            limit=search_request.limit,
-            min_similarity=search_request.similarity_threshold,
-            db=db
+            user_query=search_request.query,
+            user_id=current_user_id
         )
+        
+        # Convert RAG response to expected format
+        search_results = []
+        if rag_response and "response" in rag_response:
+            # Simulate search results format from RAG response
+            search_results = [{
+                'chunk_id': 'rag_response_1',
+                'chunk_content': rag_response["response"],
+                'similarity_score': 0.9,
+                'document_id': 'rag_knowledge_base',
+                'document_title': 'Knowledge Base',
+                'chunk_index': 0,
+                'metadata': {}
+            }]
         
         # Format results for API response
         results = []
@@ -400,7 +412,7 @@ async def search_knowledge_base(
             "total_results": len(results),
             "search_metadata": {
                 "similarity_threshold": search_request.similarity_threshold,
-                "search_method": "rag_processor_with_embeddings",
+                "search_method": "rag_workflow_direct_integration",
                 "execution_time_ms": 100,  # Would track actual timing
                 "include_metadata": search_request.include_metadata
             },

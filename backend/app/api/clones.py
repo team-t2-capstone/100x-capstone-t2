@@ -13,7 +13,8 @@ from app.database import get_supabase
 from app.core.supabase_auth import get_current_user_id, security
 from app.models.schemas import (
     CloneCreate, CloneUpdate, CloneResponse, CloneListResponse,
-    PaginationInfo
+    PaginationInfo, DocumentProcessingRequest, KnowledgeProcessingStatus,
+    RAGQueryRequest, RAGQueryResponse
 )
 
 logger = structlog.get_logger()
@@ -721,4 +722,265 @@ async def get_clone_stats(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve clone statistics"
+        )
+
+
+# RAG Integration Endpoints
+
+@router.post("/{clone_id}/process-knowledge", response_model=KnowledgeProcessingStatus)
+async def process_clone_knowledge(
+    clone_id: str,
+    request: DocumentProcessingRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    supabase_client = Depends(get_supabase)
+) -> KnowledgeProcessingStatus:
+    """
+    Process knowledge documents for a clone using RAG workflow
+    """
+    try:
+        # Import here to avoid circular imports
+        from app.services.rag_integration import process_clone_knowledge
+        
+        # First check if clone exists and user owns it
+        response = supabase_client.table("clones").select("*").eq("id", clone_id).execute()
+        
+        if not response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Clone not found"
+            )
+        
+        clone_data = response.data[0]
+        
+        # Check if user is the creator
+        if clone_data["creator_id"] != current_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the creator can process clone knowledge"
+            )
+        
+        # Extract clone information
+        clone_name = clone_data.get("name", "Unknown Clone")
+        clone_expertise = clone_data.get("expertise_areas", ["General Knowledge"])
+        clone_expertise_str = ", ".join(clone_expertise) if isinstance(clone_expertise, list) else str(clone_expertise)
+        clone_background = clone_data.get("bio", "")
+        personality_traits = str(clone_data.get("personality_traits", {}))
+        
+        # Process the knowledge using RAG integration
+        processing_status = await process_clone_knowledge(
+            clone_id=clone_id,
+            clone_name=clone_name,
+            clone_expertise=clone_expertise_str,
+            clone_background=clone_background,
+            personality_traits=personality_traits,
+            documents=request.documents,
+            links=request.links
+        )
+        
+        # Update clone with RAG information
+        rag_update_data = {
+            "rag_expert_name": processing_status.expert_name,
+            "rag_domain_name": processing_status.domain_name,
+            "document_processing_status": processing_status.overall_status,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        
+        if processing_status.rag_assistant_id:
+            rag_update_data["rag_assistant_id"] = processing_status.rag_assistant_id
+        
+        supabase_client.table("clones").update(rag_update_data).eq("id", clone_id).execute()
+        
+        logger.info("Clone knowledge processing completed", 
+                   clone_id=clone_id, 
+                   status=processing_status.overall_status)
+        
+        return processing_status
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Clone knowledge processing failed", error=str(e), clone_id=clone_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process clone knowledge: {str(e)}"
+        )
+
+
+@router.get("/{clone_id}/processing-status", response_model=KnowledgeProcessingStatus)
+async def get_processing_status(
+    clone_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+    supabase_client = Depends(get_supabase)
+) -> KnowledgeProcessingStatus:
+    """
+    Get the current processing status for a clone's knowledge
+    """
+    try:
+        # First check if clone exists and user owns it
+        response = supabase_client.table("clones").select("*").eq("id", clone_id).execute()
+        
+        if not response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Clone not found"
+            )
+        
+        clone_data = response.data[0]
+        
+        # Check if user is the creator
+        if clone_data["creator_id"] != current_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the creator can view processing status"
+            )
+        
+        # Get RAG information from clone data
+        processing_status = KnowledgeProcessingStatus(
+            clone_id=clone_id,
+            expert_name=clone_data.get("rag_expert_name", ""),
+            domain_name=clone_data.get("rag_domain_name", ""),
+            overall_status=clone_data.get("document_processing_status", "pending"),
+            rag_assistant_id=clone_data.get("rag_assistant_id"),
+            processing_started=clone_data.get("updated_at"),
+            processing_completed=clone_data.get("updated_at") if clone_data.get("document_processing_status") == "completed" else None
+        )
+        
+        return processing_status
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to get processing status", error=str(e), clone_id=clone_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve processing status"
+        )
+
+
+@router.post("/{clone_id}/query", response_model=RAGQueryResponse)
+async def query_clone_expert(
+    clone_id: str,
+    request: RAGQueryRequest,
+    current_user_id: str = Depends(get_current_user_id),
+    supabase_client = Depends(get_supabase)
+) -> RAGQueryResponse:
+    """
+    Query a clone's RAG expert for testing and chat
+    """
+    try:
+        # Import here to avoid circular imports
+        from app.services.rag_integration import query_clone_expert
+        
+        # Check if clone exists
+        response = supabase_client.table("clones").select("*").eq("id", clone_id).execute()
+        
+        if not response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Clone not found"
+            )
+        
+        clone_data = response.data[0]
+        
+        # Check if clone has been processed
+        if not clone_data.get("rag_expert_name"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Clone knowledge has not been processed yet"
+            )
+        
+        if clone_data.get("document_processing_status") != "completed":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Clone knowledge processing is not complete"
+            )
+        
+        # Query the expert using direct RAG integration
+        clone_name = clone_data.get("name", "Unknown Clone")
+        
+        result = await query_clone_expert(
+            clone_id=clone_id,
+            clone_name=clone_name,
+            query=request.query,
+            memory_type=request.memory_type
+        )
+        
+        # Format response
+        response_text = result.get("response", {}).get("text", result.get("response", ""))
+        if isinstance(response_text, dict):
+            response_text = response_text.get("text", str(response_text))
+        
+        return RAGQueryResponse(
+            response=str(response_text),
+            thread_id=result.get("thread_id"),
+            assistant_id=result.get("assistant_id"),
+            citations=result.get("citations"),
+            error=result.get("error")
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Clone query failed", error=str(e), clone_id=clone_id)
+        return RAGQueryResponse(
+            response=f"I'm sorry, I'm currently unable to process your question. Error: {str(e)}",
+            error=str(e)
+        )
+
+
+@router.post("/{clone_id}/retry-processing")
+async def retry_failed_processing(
+    clone_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+    supabase_client = Depends(get_supabase)
+) -> dict:
+    """
+    Retry processing for failed documents
+    """
+    try:
+        # First check if clone exists and user owns it
+        response = supabase_client.table("clones").select("*").eq("id", clone_id).execute()
+        
+        if not response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Clone not found"
+            )
+        
+        clone_data = response.data[0]
+        
+        # Check if user is the creator
+        if clone_data["creator_id"] != current_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the creator can retry processing"
+            )
+        
+        # Check if there are failed documents to retry
+        current_status = clone_data.get("document_processing_status")
+        if current_status not in ["failed", "partial"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No failed processing to retry"
+            )
+        
+        # Reset processing status to pending
+        update_data = {
+            "document_processing_status": "pending",
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        
+        supabase_client.table("clones").update(update_data).eq("id", clone_id).execute()
+        
+        logger.info("Clone processing retry initiated", clone_id=clone_id)
+        
+        return {"message": "Processing retry initiated successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to retry processing", error=str(e), clone_id=clone_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retry processing"
         )

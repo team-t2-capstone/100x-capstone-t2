@@ -109,24 +109,18 @@ function DashboardPageContent() {
         setLoading(true)
         setError(null)
 
-        // Get user sessions for stats
+        // Get user sessions for stats (without automatic JOIN to avoid FK issues)
         const { data: sessions, error: sessionsError } = await supabase
           .from('sessions')
           .select(`
             id,
+            clone_id,
             duration_minutes,
             total_cost,
             user_rating,
             session_type,
             created_at,
-            status,
-            clones(
-              id,
-              name,
-              bio,
-              avatar_url,
-              category
-            )
+            status
           `)
           .eq('user_id', user.id)
           .order('created_at', { ascending: false })
@@ -134,10 +128,42 @@ function DashboardPageContent() {
 
         if (sessionsError) {
           console.error('Sessions query error:', sessionsError)
-          throw sessionsError
+          console.error('Sessions error details:', JSON.stringify(sessionsError, null, 2))
+          
+          // Don't throw error for sessions, continue with empty sessions
+          console.warn('Continuing with empty sessions data due to error')
+          sessions = []
         }
 
-        // Get available clones
+        // Manually fetch clone data for sessions to avoid FK relationship issues
+        let sessionsWithClones = sessions || []
+        if (sessions && sessions.length > 0) {
+          // Get unique clone IDs from sessions
+          const cloneIds = [...new Set(sessions.map(s => s.clone_id).filter(Boolean))]
+          
+          if (cloneIds.length > 0) {
+            // Fetch clone data for these IDs
+            const { data: sessionClones, error: sessionClonesError } = await supabase
+              .from('clones')
+              .select('id, name, bio, avatar_url, category')
+              .in('id', cloneIds)
+            
+            if (!sessionClonesError && sessionClones) {
+              // Create a map for quick lookup
+              const cloneMap = new Map(sessionClones.map(clone => [clone.id, clone]))
+              
+              // Add clone data to sessions
+              sessionsWithClones = sessions.map(session => ({
+                ...session,
+                clones: session.clone_id ? cloneMap.get(session.clone_id) || null : null
+              }))
+            } else {
+              console.warn('Could not fetch clone data for sessions:', sessionClonesError)
+            }
+          }
+        }
+
+        // Get available clones for general dashboard display
         const { data: clones, error: clonesError } = await supabase
           .from('clones')
           .select('*')
@@ -148,16 +174,20 @@ function DashboardPageContent() {
 
         if (clonesError) {
           console.error('Clones query error:', clonesError)
-          throw clonesError
+          console.error('Clones error details:', JSON.stringify(clonesError, null, 2))
+          
+          // Don't throw error for clones, continue with empty clones
+          console.warn('Continuing with empty clones data due to error')
+          clones = []
         }
 
-        console.log('Sessions data:', sessions?.length || 0, 'items')
+        console.log('Sessions data:', sessionsWithClones?.length || 0, 'items')
         console.log('Clones data:', clones?.length || 0, 'items')
 
         // Calculate monthly stats
         const currentMonth = new Date().getMonth()
         const currentYear = new Date().getFullYear()
-        const monthlySessions = sessions?.filter(session => {
+        const monthlySessions = sessionsWithClones?.filter(session => {
           const sessionDate = new Date(session.created_at)
           return sessionDate.getMonth() === currentMonth && 
                  sessionDate.getFullYear() === currentYear
@@ -182,8 +212,8 @@ function DashboardPageContent() {
         )
 
         // Format recent sessions
-        console.log('Processing recent sessions from:', sessions?.length || 0, 'total sessions')
-        const recentSessions = (sessions || []).slice(0, 5).map((session: any) => ({
+        console.log('Processing recent sessions from:', sessionsWithClones?.length || 0, 'total sessions')
+        const recentSessions = (sessionsWithClones || []).slice(0, 5).map((session: any) => ({
           id: session.id,
           expertName: session.clones?.name || 'Unknown Expert',
           expertType: getCategoryType(session.clones?.category || 'coaching'),

@@ -74,6 +74,122 @@ export interface Database {
           published_at?: string
         }
       }
+      knowledge: {
+        Row: {
+          id: string
+          clone_id: string
+          title: string
+          description?: string
+          content_type: 'document' | 'link' | 'text'
+          file_name?: string
+          file_url?: string
+          file_type?: string
+          file_size_bytes?: number
+          original_url?: string
+          content_preview?: string
+          tags?: string[]
+          vector_store_status: 'pending' | 'processing' | 'completed' | 'failed'
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          clone_id: string
+          title: string
+          description?: string
+          content_type: 'document' | 'link' | 'text'
+          file_name?: string
+          file_url?: string
+          file_type?: string
+          file_size_bytes?: number
+          original_url?: string
+          content_preview?: string
+          tags?: string[]
+          vector_store_status?: 'pending' | 'processing' | 'completed' | 'failed'
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          title?: string
+          description?: string
+          content_type?: 'document' | 'link' | 'text'
+          file_name?: string
+          file_url?: string
+          file_type?: string
+          file_size_bytes?: number
+          original_url?: string
+          content_preview?: string
+          tags?: string[]
+          vector_store_status?: 'pending' | 'processing' | 'completed' | 'failed'
+          updated_at?: string
+        }
+      }
+      documents: {
+        Row: {
+          id: string
+          name: string
+          document_link: string
+          created_by?: string
+          domain: string
+          included_in_default: boolean
+          client_name?: string
+          openai_file_id?: string
+        }
+        Insert: {
+          id?: string
+          name: string
+          document_link: string
+          created_by?: string
+          domain: string
+          included_in_default?: boolean
+          client_name?: string
+          openai_file_id?: string
+        }
+        Update: {
+          name?: string
+          document_link?: string
+          created_by?: string
+          domain?: string
+          included_in_default?: boolean
+          client_name?: string
+          openai_file_id?: string
+        }
+      }
+      domains: {
+        Row: {
+          id: string
+          domain_name: string
+          expert_names: string[]
+        }
+        Insert: {
+          id?: string
+          domain_name: string
+          expert_names?: string[]
+        }
+        Update: {
+          domain_name?: string
+          expert_names?: string[]
+        }
+      }
+      experts: {
+        Row: {
+          id: string
+          name: string
+          domain: string
+          context: string
+        }
+        Insert: {
+          id?: string
+          name: string
+          domain: string
+          context: string
+        }
+        Update: {
+          name?: string
+          domain?: string
+          context?: string
+        }
+      }
       // Add other tables as needed
       sessions: {
         Row: {
@@ -81,6 +197,7 @@ export interface Database {
           user_id: string
           clone_id: string
           status: string
+          session_type?: string
           start_time: string
           end_time?: string
           duration_minutes: number
@@ -96,6 +213,7 @@ export interface Database {
           user_id: string
           clone_id: string
           status?: string
+          session_type?: string
           start_time?: string
           end_time?: string
           duration_minutes?: number
@@ -111,6 +229,7 @@ export interface Database {
           user_id?: string
           clone_id?: string
           status?: string
+          session_type?: string
           start_time?: string
           end_time?: string
           duration_minutes?: number

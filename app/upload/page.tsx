@@ -43,24 +43,36 @@ export default function UploadPage() {
             description,
             is_active,
             total_sessions,
-            documents!documents_clone_id_fkey(id)
+            knowledge(id)
           `)
           .eq('creator_id', user.id)
           .eq('is_active', true)
         
-        if (error) throw error
+        if (error) {
+          console.error('Supabase error:', error)
+          throw error
+        }
+        
+        console.log('Raw clones data:', data)
         
         const clonesWithDocCount = data?.map(clone => ({
           id: clone.id,
           name: clone.name,
           description: clone.description || '',
-          document_count: clone.documents?.length || 0,
+          document_count: clone.knowledge?.length || 0,
           status: clone.is_active ? 'active' : 'inactive'
         })) || []
         
+        console.log('Processed clones:', clonesWithDocCount)
         setClones(clonesWithDocCount)
       } catch (error) {
         console.error('Error fetching clones:', error)
+        console.error('Error details:', {
+          message: error?.message,
+          code: error?.code,
+          details: error?.details,
+          hint: error?.hint
+        })
       } finally {
         setLoading(false)
       }

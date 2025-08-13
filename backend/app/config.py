@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     GPT_4_MINI_MODEL: str = "gpt-4o-mini"
     EMBEDDING_MODEL: str = "text-embedding-3-large"
     
+    # RAG API settings - direct integration 
+    RAG_API_BASE_URL: Optional[str] = None
+    RAG_API_KEY: Optional[str] = None
+    LLAMAPARSE_API_KEY: Optional[str] = None  # LlamaParse for document processing
+    
     # Redis settings (for caching and background tasks)
     REDIS_URL: str = "redis://localhost:6379"
     

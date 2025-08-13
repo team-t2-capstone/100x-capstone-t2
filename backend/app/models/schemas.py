@@ -1,20 +1,269 @@
 """
-Pydantic schemas for API request/response models
+Pydantic schemas for CloneAI API
 """
 from datetime import datetime
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, EmailStr, ConfigDict, Field
+from typing import Optional, List, Dict, Any, Union
+from pydantic import BaseModel, EmailStr, Field
 from enum import Enum
 
 
-# Base schemas
+class UserRole(str, Enum):
+    USER = "user"
+    CREATOR = "creator"
+    ADMIN = "admin"
+
+
+class SubscriptionTier(str, Enum):
+    FREE = "free"
+    PRO = "pro"
+    ENTERPRISE = "enterprise"
+
+
+class SessionType(str, Enum):
+    CHAT = "chat"
+    VOICE = "voice"
+    VIDEO = "video"
+
+
+class SessionStatus(str, Enum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    ENDED = "ended"
+
+
+class ProcessingStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+# User Schemas
+class UserProfileBase(BaseModel):
+    email: EmailStr
+    full_name: str
+    avatar_url: Optional[str] = None
+    role: UserRole = UserRole.USER
+    timezone: str = "UTC"
+    language: str = "en"
+    subscription_tier: SubscriptionTier = SubscriptionTier.FREE
+
+
+class UserProfileCreate(UserProfileBase):
+    password: str
+
+
+class UserProfileUpdate(BaseModel):
+    full_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    timezone: Optional[str] = None
+    language: Optional[str] = None
+    preferences: Optional[Dict[str, Any]] = None
+
+
+class UserProfile(UserProfileBase):
+    id: str
+    is_active: bool = True
+    is_verified: bool = False
+    preferences: Dict[str, Any] = {}
+    credits_remaining: int = 100
+    total_spent: float = 0.0
+    created_at: datetime
+    updated_at: datetime
+    last_login: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# Clone Schemas
+class CloneBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(..., min_length=1, max_length=500)
+    bio: Optional[str] = None
+    avatar_url: Optional[str] = None
+    category: str
+    expertise_areas: List[str] = []
+    languages: List[str] = ["English"]
+    base_price: float = Field(..., gt=0)
+    currency: str = "USD"
+
+
+class CloneCreate(CloneBase):
+    personality_traits: Optional[Dict[str, Any]] = None
+    communication_style: Optional[Dict[str, Any]] = None
+    system_prompt: Optional[str] = None
+    temperature: float = Field(default=0.7, ge=0, le=2)
+    max_tokens: int = Field(default=1000, ge=1, le=4000)
+
+
+class CloneUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    description: Optional[str] = Field(None, min_length=1, max_length=500)
+    bio: Optional[str] = None
+    avatar_url: Optional[str] = None
+    category: Optional[str] = None
+    expertise_areas: Optional[List[str]] = None
+    languages: Optional[List[str]] = None
+    base_price: Optional[float] = Field(None, gt=0)
+    personality_traits: Optional[Dict[str, Any]] = None
+    communication_style: Optional[Dict[str, Any]] = None
+    system_prompt: Optional[str] = None
+    temperature: Optional[float] = Field(None, ge=0, le=2)
+    max_tokens: Optional[int] = Field(None, ge=1, le=4000)
+    is_published: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+class Clone(CloneBase):
+    id: str
+    creator_id: str
+    personality_traits: Dict[str, Any] = {}
+    communication_style: Dict[str, Any] = {}
+    system_prompt: Optional[str] = None
+    temperature: float = 0.7
+    max_tokens: int = 1000
+    is_published: bool = False
+    is_active: bool = True
+    total_sessions: int = 0
+    total_earnings: float = 0.0
+    average_rating: float = 0.0
+    total_ratings: int = 0
+    created_at: datetime
+    updated_at: datetime
+    published_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# Knowledge/Document Schemas
+class DocumentBase(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = Field(None, max_length=1000)
+    tags: List[str] = []
+
+
+class DocumentUpload(DocumentBase):
+    pass
+
+
+class DocumentResponse(DocumentBase):
+    id: str
+    clone_id: str
+    file_name: str
+    file_path: str
+    file_type: str
+    file_size_bytes: int
+    processing_status: ProcessingStatus = ProcessingStatus.PENDING
+    processing_error: Optional[str] = None
+    chunk_count: int = 0
+    doc_metadata: Dict[str, Any] = {}
+    upload_date: datetime
+    processed_date: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class KnowledgeEntryCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    content: str = Field(..., min_length=1)
+    category: Optional[str] = None
+    tags: List[str] = []
+
+
+class KnowledgeEntryResponse(BaseModel):
+    id: str
+    clone_id: str
+    title: str
+    content: str
+    category: Optional[str] = None
+    tags: List[str] = []
+    doc_metadata: Dict[str, Any] = {}
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class KnowledgeSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    clone_id: str
+    limit: int = Field(default=10, ge=1, le=50)
+    min_similarity: float = Field(default=0.7, ge=0, le=1)
+
+
+class KnowledgeSearchResult(BaseModel):
+    chunk_id: str
+    document_id: str
+    document_title: str
+    chunk_content: str
+    similarity_score: float
+    metadata: Dict[str, Any] = {}
+
+
+# RAG Integration Schemas
+class RAGDocumentUpload(BaseModel):
+    """Schema for document upload to external RAG service"""
+    expert_name: str
+    domain_name: str
+    document_urls: Dict[str, str]
+
+
+class RAGVectorStoreUpdate(BaseModel):
+    """Schema for updating RAG vector store"""
+    domain_name: Optional[str] = None
+    expert_name: Optional[str] = None
+    document_urls: Dict[str, str]
+
+
+class RAGExpertQuery(BaseModel):
+    """Schema for querying RAG expert"""
+    expert_name: str
+    query: str
+    memory_type: str = "expert"
+    client_name: Optional[str] = None
+    thread_id: Optional[str] = None
+
+
+class RAGExpertResponse(BaseModel):
+    """Schema for RAG expert response"""
+    response: str
+    thread_id: str
+    assistant_id: str
+
+
+class RAGProcessingStatus(BaseModel):
+    """Schema for RAG processing status"""
+    status: str
+    message: str
+    vector_id: Optional[str] = None
+    domain_name: Optional[str] = None
+    expert_name: Optional[str] = None
+    new_file_ids: List[str] = []
+    all_file_ids: List[str] = []
+    batch_id: Optional[str] = None
+
+
+# Generic response schemas
+class SuccessResponse(BaseModel):
+    message: str
+    data: Optional[Dict[str, Any]] = None
+
+
+class ErrorResponse(BaseModel):
+    error: str
+    detail: Optional[str] = None
+    code: Optional[str] = None
 class BaseSchema(BaseModel):
     """Base schema with common configuration"""
-    model_config = ConfigDict(
-        from_attributes=True,
-        use_enum_values=True,
-        arbitrary_types_allowed=True
-    )
+    
+    class Config:
+        from_attributes = True
+        use_enum_values = True
+        arbitrary_types_allowed = True
 
 
 # Enums
@@ -520,6 +769,50 @@ class CloneLearningResponse(BaseSchema):
     created_at: datetime
     updated_at: datetime
     last_learning_event: Optional[datetime]
+
+
+# RAG Integration Schemas
+class DocumentProcessingRequest(BaseSchema):
+    """Request for processing clone documents"""
+    documents: List[Dict[str, str]] = Field(default_factory=list)
+    links: List[Dict[str, str]] = Field(default_factory=list)
+
+
+class DocumentStatus(BaseSchema):
+    """Status of a single document"""
+    name: str
+    url: str
+    status: str  # 'pending', 'processing', 'completed', 'failed'
+    file_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class KnowledgeProcessingStatus(BaseSchema):
+    """Status of knowledge processing for a clone"""
+    clone_id: str
+    expert_name: str
+    domain_name: str
+    overall_status: str  # 'pending', 'processing', 'completed', 'failed', 'partial'
+    documents: List[DocumentStatus] = Field(default_factory=list)
+    rag_assistant_id: Optional[str] = None
+    processing_started: Optional[str] = None
+    processing_completed: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class RAGQueryRequest(BaseSchema):
+    """Request for querying RAG expert"""
+    query: str = Field(..., min_length=1, max_length=2000)
+    memory_type: str = Field(default="expert")  # "llm", "domain", "expert", "client"
+
+
+class RAGQueryResponse(BaseSchema):
+    """Response from RAG query"""
+    response: str
+    thread_id: Optional[str] = None
+    assistant_id: Optional[str] = None
+    citations: Optional[List[Dict[str, str]]] = None
+    error: Optional[str] = None
 
 
 class MemoryPolicyCreate(BaseSchema):
