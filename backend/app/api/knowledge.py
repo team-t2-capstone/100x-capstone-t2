@@ -346,8 +346,7 @@ async def upload_document(
                 file_path, 
                 file_content,
                 file_options={
-                    "content-type": file.content_type or "application/octet-stream",
-                    "upsert": False
+                    "content-type": file.content_type or "application/octet-stream"
                 }
             )
             

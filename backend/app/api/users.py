@@ -192,8 +192,7 @@ async def upload_avatar(
                 unique_filename,
                 file_content,
                 file_options={
-                    "content-type": file.content_type,
-                    "upsert": True  # Replace if exists
+                    "content-type": file.content_type
                 }
             )
             
