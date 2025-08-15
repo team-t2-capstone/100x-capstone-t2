@@ -28,6 +28,27 @@ export interface DocumentResponse {
   processed_at?: string;
   error_message?: string;
   chunk_count?: number;
+  content_hash?: string;
+}
+
+export interface DuplicateCheckRequest {
+  clone_id: string;
+  filename: string;
+  file_size: number;
+  content_hash?: string;
+}
+
+export interface DuplicateCheckResponse {
+  is_duplicate: boolean;
+  existing_document?: {
+    id: string;
+    filename: string;
+    processing_status: string;
+    created_at: string;
+    match_type: 'filename' | 'content_hash' | 'size_and_name';
+  };
+  message: string;
+  allow_overwrite?: boolean;
 }
 
 export interface KnowledgeEntryRequest {
@@ -111,7 +132,28 @@ export class KnowledgeApi {
     return headers;
   }
 
-  async uploadDocument(cloneId: string, data: DocumentUploadRequest): Promise<DocumentResponse> {
+  async checkDocumentDuplicate(cloneId: string, data: DuplicateCheckRequest): Promise<DuplicateCheckResponse> {
+    const response = await fetch(`${API_BASE_URL}/api/v1/clones/${cloneId}/documents/check-duplicate`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(data),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      
+      // Handle specific "Clone not found" errors to indicate race condition
+      if (response.status === 404 && (error.detail?.includes('Clone not found') || error.detail?.includes('not found'))) {
+        throw new Error('Clone not found - this may be a timing issue, please retry');
+      }
+      
+      throw new Error(error.detail || `Failed to check for duplicates: ${response.status}`);
+    }
+
+    return response.json();
+  }
+
+  async uploadDocument(cloneId: string, data: DocumentUploadRequest, options?: { force_overwrite?: boolean }): Promise<DocumentResponse> {
     const formData = new FormData();
     formData.append('file', data.file);
     formData.append('title', data.title);
@@ -120,6 +162,9 @@ export class KnowledgeApi {
     }
     if (data.tags && data.tags.length > 0) {
       formData.append('tags_str', data.tags.join(', '));
+    }
+    if (options?.force_overwrite) {
+      formData.append('force_overwrite', 'true');
     }
 
     const response = await fetch(`${API_BASE_URL}/api/v1/clones/${cloneId}/documents`, {
@@ -365,17 +410,23 @@ export class KnowledgeApi {
   }
 
   /**
-   * Process knowledge with simple retry logic
+   * Process knowledge with enhanced retry logic for race conditions
    */
   async processKnowledgeWithRetry(
     cloneId: string, 
-    maxRetries: number = 2
+    maxRetries: number = 3
   ): Promise<ProcessingResult> {
     let lastError: ApiError | null = null;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         console.log(`Processing attempt ${attempt}/${maxRetries} for clone ${cloneId}`);
+        
+        // For race condition handling, add a small delay before first attempt
+        if (attempt === 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
         const result = await this.processKnowledge(cloneId);
         
         // Success - return result
@@ -385,13 +436,21 @@ export class KnowledgeApi {
         lastError = error as ApiError;
         console.error(`Attempt ${attempt} failed:`, lastError.message);
         
+        // Special handling for "Clone not found" errors (likely race condition)
+        if (lastError.message.includes('Clone not found') && attempt < maxRetries) {
+          const delay = 2000 * attempt; // 2s, 4s, 6s
+          console.log(`Clone not found error, waiting ${delay}ms before retry (race condition handling)...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        
         // Don't retry if error is not retryable or if it's the last attempt
         if (!lastError.retryable || attempt === maxRetries) {
           break;
         }
         
-        // Simple delay: 3s between retries
-        const delay = 3000;
+        // Standard delay for other retryable errors
+        const delay = 3000 * attempt;
         console.log(`Waiting ${delay}ms before retry...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
@@ -447,8 +506,8 @@ export class KnowledgeApi {
 export const knowledgeApi = new KnowledgeApi();
 
 // Convenience functions
-export const uploadDocument = (cloneId: string, data: DocumentUploadRequest) => 
-  knowledgeApi.uploadDocument(cloneId, data);
+export const uploadDocument = (cloneId: string, data: DocumentUploadRequest, options?: { force_overwrite?: boolean }) => 
+  knowledgeApi.uploadDocument(cloneId, data, options);
 
 export const createKnowledgeEntry = (data: KnowledgeEntryRequest) => 
   knowledgeApi.createKnowledgeEntry(data);
@@ -479,4 +538,28 @@ export const getUserFriendlyError = (error: ApiError) =>
 // Type guards
 export const isApiError = (error: any): error is ApiError => {
   return error && typeof error.type === 'string' && typeof error.retryable === 'boolean';
+};
+
+// Duplicate detection functions with enhanced error handling
+export const checkDocumentDuplicate = async (cloneId: string, data: DuplicateCheckRequest): Promise<DuplicateCheckResponse> => {
+  try {
+    return await knowledgeApi.checkDocumentDuplicate(cloneId, data);
+  } catch (error) {
+    // Re-throw with enhanced error context for race condition handling
+    if (error instanceof Error && error.message.includes('Clone not found')) {
+      throw new Error(`Clone not found during duplicate check. This may be a timing issue - the clone might still be creating. Please retry.`);
+    }
+    throw error;
+  }
+};
+
+export const uploadDocumentWithOverwrite = (cloneId: string, data: DocumentUploadRequest, forceOverwrite?: boolean) => 
+  knowledgeApi.uploadDocument(cloneId, data, { force_overwrite: forceOverwrite });
+
+// Helper function to generate content hash for client-side duplicate detection
+export const generateFileHash = async (file: File): Promise<string> => {
+  const arrayBuffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 };

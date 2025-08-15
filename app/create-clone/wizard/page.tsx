@@ -21,6 +21,7 @@ import { getAuthTokens } from '@/lib/api-client';
 import { setupStorageBuckets, checkStorageBuckets } from '@/lib/setup-storage';
 import { toast } from '@/components/ui/use-toast';
 import { EnhancedProcessingMonitor } from '@/components/processing/enhanced-processing-monitor';
+import { EnhancedDocumentUpload } from '@/components/document-upload/enhanced-document-upload';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -130,12 +131,18 @@ function CloneWizardContent() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [createdCloneId, setCreatedCloneId] = useState<string | null>(null)
+  const [isNavigating, setIsNavigating] = useState(false)
 
   // RAG processing state
   const [isProcessingKnowledge, setIsProcessingKnowledge] = useState(false)
   const [knowledgeProcessingStatus, setKnowledgeProcessingStatus] = useState<string>('pending')
   const [retryCount, setRetryCount] = useState(0)
   const [processingProgress, setProcessingProgress] = useState<{ completed: number; total: number; errors: string[] }>({ completed: 0, total: 0, errors: [] })
+  
+  // Track which documents have been processed to prevent duplicates
+  const [processedDocuments, setProcessedDocuments] = useState<Set<string>>(new Set())
+  const [hasTriggeredProcessing, setHasTriggeredProcessing] = useState(false)
+  const [lastProcessedCloneId, setLastProcessedCloneId] = useState<string | null>(null)
   const [formData, setFormData] = useState({
     // Step 1: Basic Information
     name: "",
@@ -154,6 +161,8 @@ function CloneWizardContent() {
     // Step 3: Knowledge Transfer
     documents: [] as File[],
     links: [] as string[],
+    existingDocuments: [] as Array<{name: string; url: string; status: string; type: string; id: string}>,
+    existingLinks: [] as Array<{name: string; url: string; status: string; type: string; id: string}>,
 
     // Step 4: Personality & Style
     personality: {
@@ -172,7 +181,9 @@ function CloneWizardContent() {
     enableAudio: false,
     enableVideo: false,
 
-    // Step 6: Testing (results)
+    // Step 6: Testing & Preview
+    testPrompt: "",
+    testResponse: "",
     testResults: {
       accuracy: 85,
       personality: 92,
@@ -195,10 +206,13 @@ function CloneWizardContent() {
   // Load existing clone data if editing
   useEffect(() => {
     const cloneId = searchParams.get('clone_id')
-    if (cloneId) {
+    if (cloneId && cloneId !== createdCloneId) {
+      console.log('Loading clone data from URL parameter:', cloneId)
       loadCloneData(cloneId)
+    } else if (cloneId && cloneId === createdCloneId) {
+      console.log('Clone ID from URL matches current clone, no need to reload')
     }
-  }, [searchParams])
+  }, [searchParams, createdCloneId])
 
   const loadCloneData = async (cloneId: string) => {
     try {
@@ -236,6 +250,14 @@ function CloneWizardContent() {
         // Load Q&A responses
         const qaResponses = await loadQAResponses(cloneId)
         
+        // Load knowledge data
+        const knowledgeData = await loadKnowledgeData(cloneId)
+        
+        // Reset processing flags when loading existing clone
+        setHasTriggeredProcessing(false)
+        setLastProcessedCloneId(null)
+        setProcessedDocuments(new Set())
+        
         // Populate form data with existing clone data
         setFormData({
           // Step 1: Basic Information
@@ -255,6 +277,8 @@ function CloneWizardContent() {
           // Step 3: Knowledge Transfer
           documents: [],
           links: [],
+          existingDocuments: knowledgeData.documents || [],
+          existingLinks: knowledgeData.links || [],
 
           // Step 4: Personality & Style
           personality: clone.personality_traits || {
@@ -291,16 +315,29 @@ function CloneWizardContent() {
           isPublished: clone.is_published || false,
         })
         
+        // Set knowledge processing status if we have existing knowledge
+        if (knowledgeData.documents.length > 0 || knowledgeData.links.length > 0) {
+          setKnowledgeProcessingStatus(knowledgeData.processingStatus)
+          console.log('Set knowledge processing status:', knowledgeData.processingStatus)
+        }
+        
         toast({
           title: "Clone data loaded",
-          description: "Your existing clone data has been loaded for editing",
+          description: `Your existing clone data has been loaded for editing. Found ${knowledgeData.documents.length} documents and ${knowledgeData.links.length} links.`,
         })
 
-        // Navigate to the first incomplete section after data loads
+        // Navigate to the first incomplete section after data loads, but respect existing processing state
         setTimeout(() => {
           const nextIncompleteStep = findFirstIncompleteSection()
           console.log('Navigating to first incomplete section:', nextIncompleteStep)
           setCurrentStep(nextIncompleteStep)
+          
+          // Set processing status based on existing knowledge
+          if (knowledgeData.documents.length > 0 || knowledgeData.links.length > 0) {
+            console.log('Setting processing flags for existing clone with knowledge')
+            setHasTriggeredProcessing(true)
+            setLastProcessedCloneId(cloneId)
+          }
         }, 100)
       }
     } catch (error) {
@@ -342,6 +379,35 @@ function CloneWizardContent() {
       ...prev.slice(1)
     ])
   }, [formData.expertise, formData.customDomain])
+  
+  // Enhanced state management for processing flags and duplicate prevention
+  useEffect(() => {
+    if (currentStep !== 3) {
+      // Clear processing flags if we're not on the knowledge transfer step
+      if (hasTriggeredProcessing && currentStep > 3) {
+        // Only keep processing flags if we've moved forward past step 3
+        console.log('Moved past step 3, keeping processing flags to prevent re-processing')
+      } else if (currentStep < 3) {
+        // If we go back before step 3, clear everything
+        console.log('Navigated back before step 3, clearing all processing flags')
+        setHasTriggeredProcessing(false)
+        setLastProcessedCloneId(null)
+        setProcessedDocuments(new Set())
+      }
+    }
+  }, [currentStep, hasTriggeredProcessing])
+  
+  // Prevent duplicate processing when clone ID changes
+  useEffect(() => {
+    if (createdCloneId && createdCloneId !== lastProcessedCloneId) {
+      console.log('Clone ID changed, resetting processing flags:', { 
+        old: lastProcessedCloneId, 
+        new: createdCloneId 
+      })
+      setHasTriggeredProcessing(false)
+      setProcessedDocuments(new Set())
+    }
+  }, [createdCloneId, lastProcessedCloneId])
   const [testInput, setTestInput] = useState("")
 
   // Calculate progress based on sections completed
@@ -381,8 +447,22 @@ function CloneWizardContent() {
       completedSections++
     }
     
-    // Section 3: Knowledge Transfer (optional - always counts as completed)
+    // Section 3: Knowledge Transfer (optional but shows status if has content)
+    const hasKnowledgeContent = (formData.documents && formData.documents.length > 0) || 
+                               (formData.links && formData.links.length > 0) ||
+                               (formData.existingDocuments && formData.existingDocuments.length > 0) ||
+                               (formData.existingLinks && formData.existingLinks.length > 0)
+    // Always count as completed since it's optional, but log status for debugging
     completedSections++
+    
+    console.log('Section 3 Debug:', {
+      hasDocuments: formData.documents?.length || 0,
+      hasLinks: formData.links?.length || 0,
+      hasExistingDocuments: formData.existingDocuments?.length || 0,
+      hasExistingLinks: formData.existingLinks?.length || 0,
+      hasKnowledgeContent,
+      knowledgeProcessingStatus
+    })
     
     // Section 4: Personality & Style
     const section4Complete = formData.communicationStyle && formData.responseLength
@@ -607,6 +687,42 @@ INSTRUCTIONS:
     }
   }
 
+  // Enhanced clone verification with retry logic
+  const verifyCloneExists = async (cloneId: string, maxAttempts: number = 5): Promise<boolean> => {
+    let verifyAttempts = 0;
+    
+    while (verifyAttempts < maxAttempts) {
+      verifyAttempts++;
+      const waitTime = 1000 * verifyAttempts; // 1s, 2s, 3s, 4s, 5s
+      
+      console.log(`Clone verification attempt ${verifyAttempts}/${maxAttempts} (after ${waitTime}ms wait)...`)
+      
+      if (verifyAttempts > 1) {
+        await new Promise(resolve => setTimeout(resolve, waitTime))
+      }
+      
+      try {
+        const { data: cloneExists, error: cloneCheckError } = await supabase
+          .from('clones')
+          .select('id, name, creator_id')
+          .eq('id', cloneId)
+          .single()
+          
+        if (!cloneCheckError && cloneExists) {
+          console.log(`Clone verified successfully after ${verifyAttempts} attempts:`, cloneExists)
+          return true
+        }
+        
+        console.log(`Verification attempt ${verifyAttempts} failed:`, cloneCheckError?.message)
+      } catch (error) {
+        console.log(`Verification attempt ${verifyAttempts} error:`, error)
+      }
+    }
+    
+    console.error('Clone verification failed after all attempts')
+    return false
+  }
+
   // RAG Knowledge Processing Function
   const retryKnowledgeProcessing = async (cloneId: string) => {
     if (!cloneId) return
@@ -623,6 +739,12 @@ INSTRUCTIONS:
         title: "Retrying Processing...",
         description: `Attempting to process failed documents (Attempt ${retryCount})`,
       })
+      
+      // Verify clone exists before attempting processing
+      const cloneExists = await verifyCloneExists(cloneId, 3)
+      if (!cloneExists) {
+        throw new Error('Clone verification failed. Please try saving the clone again.')
+      }
       
       const { data: { session } } = await supabase.auth.getSession()
       
@@ -716,6 +838,12 @@ INSTRUCTIONS:
       return
     }
 
+    // Prevent concurrent processing
+    if (isProcessingKnowledge) {
+      console.log('⚠️ RAG processing already in progress, skipping')
+      return
+    }
+
     try {
       setIsProcessingKnowledge(true)
       setKnowledgeProcessingStatus('processing')
@@ -732,20 +860,11 @@ INSTRUCTIONS:
         throw new Error(`Invalid clone ID format: ${cloneId}`)
       }
 
-      // Double-check clone exists before processing
-      console.log('Verifying clone exists in database...')
-      const { data: cloneCheck, error: cloneError } = await supabase
-        .from('clones')
-        .select('id, name, creator_id')
-        .eq('id', cloneId)
-        .single()
-
-      if (cloneError || !cloneCheck) {
-        console.error('Clone verification failed in RAG processing:', { cloneError, cloneId })
-        throw new Error(`Clone not found in database: ${cloneId}. Error: ${cloneError?.message || 'Unknown'}`)
+      // Ensure clone exists before starting processing
+      const cloneExists = await ensureCloneExists(cloneId)
+      if (!cloneExists) {
+        throw new Error(`Clone not found or not accessible: ${cloneId}. Please refresh the page and try again.`)
       }
-
-      console.log('Clone verified successfully:', cloneCheck)
 
       // Check if required tables exist before proceeding
       const tablesExist = await ensureTablesExist()
@@ -765,12 +884,27 @@ INSTRUCTIONS:
       }
 
       // Prepare document URLs by uploading files first
-      const processedDocuments = []
-      const processedLinks = []
+      const processedDocuments: Array<{name: string; url: string; type: string}> = []
+      const processedLinks: Array<{name: string; url: string; type: string}> = []
 
-      // Process uploaded documents
+      // Process uploaded documents with enhanced duplicate detection
       for (let i = 0; i < formData.documents.length; i++) {
         const doc = formData.documents[i]
+        
+        // Skip if document already processed in this session
+        if (processedDocuments.some(processed => processed.name === doc.name)) {
+          console.log(`Skipping already processed document (session cache): ${doc.name}`)
+          setProcessingProgress(prev => ({ ...prev, completed: prev.completed + 1 }))
+          continue
+        }
+        
+        // Skip if document already exists in knowledge base
+        if (formData.existingDocuments?.some(existing => existing.name === doc.name)) {
+          console.log(`Skipping already existing document in knowledge base: ${doc.name}`)
+          setProcessingProgress(prev => ({ ...prev, completed: prev.completed + 1 }))
+          continue
+        }
+        
         try {
           // Upload document to Supabase Storage first
           const fileUrl = await uploadFile(doc, 'knowledge-documents', 'clone-documents')
@@ -819,6 +953,9 @@ INSTRUCTIONS:
               type: 'document'
             })
             console.log(`Document ${doc.name} uploaded successfully:`, fileUrl)
+            
+            // Track processed document to prevent duplicates
+            setProcessedDocuments(prev => new Set([...prev, doc.name]))
           }
           setProcessingProgress(prev => ({ ...prev, completed: prev.completed + 1 }))
         } catch (error) {
@@ -831,8 +968,22 @@ INSTRUCTIONS:
         }
       }
 
-      // Process links
+      // Process links with enhanced duplicate detection
       for (const link of formData.links) {
+        // Skip if link already processed in this session
+        if (processedLinks.some(processed => processed.url === link)) {
+          console.log(`Skipping already processed link (session cache): ${link}`)
+          setProcessingProgress(prev => ({ ...prev, completed: prev.completed + 1 }))
+          continue
+        }
+        
+        // Skip if link already exists in knowledge base
+        if (formData.existingLinks?.some(existing => existing.url === link)) {
+          console.log(`Skipping already existing link in knowledge base: ${link}`)
+          setProcessingProgress(prev => ({ ...prev, completed: prev.completed + 1 }))
+          continue
+        }
+        
         try {
           // Store URL metadata in knowledge table
           const { error: knowledgeError } = await supabase.from('knowledge').insert({
@@ -875,6 +1026,9 @@ INSTRUCTIONS:
             url: link,
             type: 'link'
           })
+          
+          // Track processed link to prevent duplicates
+          setProcessedDocuments(prev => new Set([...prev, link]))
         } catch (error) {
           console.error(`Failed to process link ${link}:`, error)
         }
@@ -1104,12 +1258,19 @@ INSTRUCTIONS:
           label: "Retry",
           onClick: () => {
             console.log('User requested retry from toast')
+            // Reset processing flags before retry
+            setHasTriggeredProcessing(false)
+            setLastProcessedCloneId(null)
+            setProcessedDocuments(new Set())
             processKnowledgeWithRAG(cloneId)
           }
         } : undefined
       })
     } finally {
       setIsProcessingKnowledge(false)
+      
+      // Keep hasTriggeredProcessing true on completion to prevent re-processing
+      // It will only be reset on navigation back or on error
     }
   }
 
@@ -1225,6 +1386,135 @@ INSTRUCTIONS:
     } catch (error) {
       console.error('Failed to load Q&A responses:', error)
       return {}
+    }
+  }
+
+  // Load existing knowledge documents and links for the clone
+  const loadKnowledgeData = async (cloneId: string) => {
+    try {
+      console.log('Loading knowledge data for clone:', cloneId)
+      
+      const { data: knowledgeData, error } = await supabase
+        .from('knowledge')
+        .select('*')
+        .eq('clone_id', cloneId)
+        .order('created_at', { ascending: false })
+      
+      if (error) {
+        console.error('Error loading knowledge data:', error)
+        return { documents: [], links: [], processingStatus: 'pending' }
+      }
+      
+      if (!knowledgeData || knowledgeData.length === 0) {
+        console.log('No knowledge data found for clone')
+        return { documents: [], links: [], processingStatus: 'pending' }
+      }
+      
+      console.log('Loaded knowledge entries:', knowledgeData.length)
+      
+      const documents: Array<{name: string; url: string; status: string; type: string; id: string}> = []
+      const links: Array<{name: string; url: string; status: string; type: string; id: string}> = []
+      
+      // Separate documents and links
+      knowledgeData.forEach(item => {
+        const itemData = {
+          id: item.id,
+          name: item.title || item.file_name || 'Unknown',
+          url: item.file_url || item.original_url || '',
+          status: item.vector_store_status,
+          type: item.content_type
+        }
+        
+        if (item.content_type === 'document' && item.file_url) {
+          documents.push(itemData)
+        } else if (item.content_type === 'link' && item.original_url) {
+          links.push({
+            ...itemData,
+            url: item.original_url,
+            name: item.title || `Web Content: ${new URL(item.original_url).hostname}`
+          })
+        }
+      })
+      
+      // Determine overall processing status
+      const allStatuses = knowledgeData.map(item => item.vector_store_status)
+      let overallStatus = 'pending'
+      
+      if (allStatuses.length > 0) {
+        if (allStatuses.every(status => status === 'completed')) {
+          overallStatus = 'completed'
+        } else if (allStatuses.some(status => status === 'processing')) {
+          overallStatus = 'processing'
+        } else if (allStatuses.some(status => status === 'failed')) {
+          overallStatus = 'partial'
+        }
+      }
+      
+      console.log('Knowledge data processed:', {
+        documents: documents.length,
+        links: links.length,
+        overallStatus,
+        statuses: allStatuses
+      })
+      
+      return {
+        documents,
+        links,
+        processingStatus: overallStatus
+      }
+    } catch (error) {
+      console.error('Error loading knowledge data:', error)
+      return { documents: [], links: [], processingStatus: 'pending' }
+    }
+  }
+
+  // Delete existing knowledge item (document or link)
+  const deleteKnowledgeItem = async (itemId: string, itemType: 'document' | 'link') => {
+    try {
+      console.log(`Deleting ${itemType} with ID:`, itemId)
+      
+      const { error } = await supabase
+        .from('knowledge')
+        .delete()
+        .eq('id', itemId)
+      
+      if (error) {
+        console.error(`Error deleting ${itemType}:`, error)
+        toast({
+          title: `Failed to delete ${itemType}`,
+          description: "Please try again later",
+          variant: "destructive",
+        })
+        return false
+      }
+      
+      // Update form data to remove the deleted item
+      if (itemType === 'document') {
+        setFormData(prev => ({
+          ...prev,
+          existingDocuments: prev.existingDocuments?.filter(doc => doc.id !== itemId) || []
+        }))
+      } else {
+        setFormData(prev => ({
+          ...prev,
+          existingLinks: prev.existingLinks?.filter(link => link.id !== itemId) || []
+        }))
+      }
+      
+      toast({
+        title: `${itemType.charAt(0).toUpperCase() + itemType.slice(1)} deleted`,
+        description: `The ${itemType} has been removed from your knowledge base`,
+      })
+      
+      return true
+    } catch (error) {
+      console.error(`Error deleting ${itemType}:`, error)
+      toast({
+        title: `Failed to delete ${itemType}`,
+        description: "Please try again later",
+        variant: "destructive",
+      })
+      return false
     }
   }
 
@@ -1414,6 +1704,14 @@ INSTRUCTIONS:
   }
 
   const handleNext = async () => {
+    // Prevent rapid navigation clicks
+    if (isNavigating || isSubmitting) {
+      console.log('⚠️ Navigation already in progress, ignoring click')
+      return
+    }
+    
+    setIsNavigating(true)
+    
     console.log('▶️ DEBUG: handleNext called:', {
       currentStep,
       documentsInFormData: formData.documents.length,
@@ -1421,17 +1719,18 @@ INSTRUCTIONS:
       documents: formData.documents.map(doc => ({ name: doc.name, size: doc.size }))
     })
 
-    // Validate current step before proceeding
-    const validation = validateStep(currentStep)
-    
-    if (!validation.isValid) {
-      toast({
-        title: "Please complete required fields",
-        description: validation.errors.join(". "),
-        variant: "destructive",
-      })
-      return
-    }
+    try {
+      // Validate current step before proceeding
+      const validation = validateStep(currentStep)
+      
+      if (!validation.isValid) {
+        toast({
+          title: "Please complete required fields",
+          description: validation.errors.join(". "),
+          variant: "destructive",
+        })
+        return
+      }
     
     if (currentStep < steps.length) {
       console.log('💾 DEBUG: Before saveProgress:', {
@@ -1460,64 +1759,58 @@ INSTRUCTIONS:
       }
       
       // Special handling for Step 3 (Knowledge Transfer) - trigger RAG processing
+      const hasDocumentsOrLinks = formData.documents.length > 0 || formData.links.length > 0
+      const hasExistingContent = (formData.existingDocuments && formData.existingDocuments.length > 0) || 
+                                (formData.existingLinks && formData.existingLinks.length > 0)
+      const shouldTriggerProcessing = currentStep === 3 && hasDocumentsOrLinks && 
+        !hasTriggeredProcessing && !isProcessingKnowledge && 
+        currentCloneId !== lastProcessedCloneId && !hasExistingContent
+      
       console.log('🎯 DEBUG: Checking if should trigger RAG processing:', {
         currentStep,
         documentsLength: formData.documents.length,
         linksLength: formData.links.length,
+        existingDocumentsLength: formData.existingDocuments?.length || 0,
+        existingLinksLength: formData.existingLinks?.length || 0,
         documents: formData.documents.map(doc => ({ name: doc.name, size: doc.size })),
         links: formData.links,
-        shouldTrigger: currentStep === 3 && (formData.documents.length > 0 || formData.links.length > 0)
+        hasDocumentsOrLinks,
+        hasExistingContent,
+        hasTriggeredProcessing,
+        isProcessingKnowledge,
+        currentCloneId,
+        lastProcessedCloneId,
+        shouldTrigger: shouldTriggerProcessing
       })
       
-      if (currentStep === 3 && (formData.documents.length > 0 || formData.links.length > 0)) {
+      if (shouldTriggerProcessing) {
         try {
           // Give extra time for database consistency after clone creation/update
           console.log('Waiting extra time for database consistency after saveProgress...')
           await new Promise(resolve => setTimeout(resolve, 3000))
 
-          // Retry-based verification with exponential backoff
-          let cloneExists = null;
-          let cloneCheckError = null;
-          let verifyAttempts = 0;
-          const maxVerifyAttempts = 5;
+          // Use the enhanced verification function
+          const cloneExists = await verifyCloneExists(currentCloneId, 5)
           
-          while (verifyAttempts < maxVerifyAttempts && !cloneExists) {
-            verifyAttempts++;
-            const waitTime = 1000 * verifyAttempts; // 1s, 2s, 3s, 4s, 5s
-            
-            console.log(`Clone verification attempt ${verifyAttempts}/${maxVerifyAttempts} (after ${waitTime}ms wait)...`)
-            
-            if (verifyAttempts > 1) {
-              await new Promise(resolve => setTimeout(resolve, waitTime))
-            }
-            
-            const result = await supabase
-              .from('clones')
-              .select('id, name, creator_id')
-              .eq('id', currentCloneId)
-              .single()
-              
-            cloneExists = result.data
-            cloneCheckError = result.error
-            
-            console.log(`Verification attempt ${verifyAttempts}:`, { found: !!cloneExists, error: cloneCheckError?.message })
-          }
-          
-          if (cloneCheckError || !cloneExists) {
-            console.error('Clone verification failed after all attempts:', cloneCheckError)
+          if (!cloneExists) {
             toast({
               title: "Clone verification failed",
-              description: `Please try saving the clone again. Attempts: ${verifyAttempts}`,
+              description: "Please try saving the clone again or refresh the page.",
               variant: "destructive"
             })
             return
           }
           
-          console.log('Clone verified successfully after attempts:', verifyAttempts, cloneExists)
+          // Mark as triggered to prevent duplicate processing
+          setHasTriggeredProcessing(true)
+          setLastProcessedCloneId(currentCloneId)
           
           // Process knowledge in background - don't block navigation
           processKnowledgeWithRAG(currentCloneId).catch(error => {
             console.error('Background RAG processing failed:', error)
+            // Reset flags on error to allow retry
+            setHasTriggeredProcessing(false)
+            setLastProcessedCloneId(null)
           })
           
           toast({
@@ -1526,6 +1819,9 @@ INSTRUCTIONS:
           })
         } catch (error) {
           console.error('Failed to start RAG processing:', error)
+          // Reset flags on error to allow retry
+          setHasTriggeredProcessing(false)
+          setLastProcessedCloneId(null)
           toast({
             title: "Processing Warning",
             description: "Could not start knowledge processing, but you can continue with setup.",
@@ -1536,17 +1832,48 @@ INSTRUCTIONS:
       
       setCurrentStep(currentStep + 1)
     }
+    } finally {
+      // Reset navigation flag after a short delay
+      setTimeout(() => {
+        setIsNavigating(false)
+      }, 500)
+    }
   }
 
   const handlePrevious = () => {
     if (currentStep > 1) {
       setCurrentStep(currentStep - 1)
+      
+      // Clear processing flags when navigating away from step 3
+      if (currentStep === 4) {
+        console.log('🔄 DEBUG: Navigating back from step 4, clearing processing flags')
+        setHasTriggeredProcessing(false)
+      }
     }
   }
 
   const saveProgress = async (): Promise<string | null> => {
     try {
       setIsSubmitting(true)
+      
+      // Check if we already have a clone ID and if it exists in the database
+      if (createdCloneId) {
+        console.log('Checking if existing clone still exists:', createdCloneId)
+        
+        const { data: existingClone, error: checkError } = await supabase
+          .from('clones')
+          .select('id, name, creator_id')
+          .eq('id', createdCloneId)
+          .eq('creator_id', user?.id)
+          .single()
+          
+        if (checkError || !existingClone) {
+          console.warn('Existing clone not found, will create new one:', checkError?.message)
+          setCreatedCloneId(null)
+        } else {
+          console.log('Existing clone found, will update it:', existingClone)
+        }
+      }
       
       // Upload photo if exists
       let avatarUrl = null
@@ -1565,9 +1892,13 @@ INSTRUCTIONS:
       }
       
       if (!createdCloneId) {
-        // Create initial clone
+        // Create initial clone with validation
+        if (!formData.name?.trim()) {
+          throw new Error('Clone name is required before saving')
+        }
+        
         const cloneData: CloneCreateRequest = {
-          name: formData.name || 'Untitled Clone',
+          name: formData.name.trim(),
           category: formData.expertise === 'other' ? formData.customDomain || 'Other' : formData.expertise || 'coaching',
           expertise_areas: [],
           base_price: formData.pricing.text.min || 25,
@@ -1602,6 +1933,27 @@ INSTRUCTIONS:
         console.log('Credentials being saved:', formData.credentials)
         console.log('Credentials trimmed:', formData.credentials.trim())
         console.log('Avatar URL being saved:', avatarUrl || formData.existingAvatarUrl)
+        
+        // Check for potential duplicates before creating
+        const { data: existingClones, error: duplicateCheckError } = await supabase
+          .from('clones')
+          .select('id, name')
+          .eq('creator_id', user?.id)
+          .eq('name', supabaseCloneData.name)
+          .limit(1)
+          
+        if (!duplicateCheckError && existingClones && existingClones.length > 0) {
+          console.warn('Clone with same name already exists:', existingClones[0])
+          // Use the existing clone instead of creating a duplicate
+          setCreatedCloneId(existingClones[0].id)
+          
+          toast({
+            title: "Existing clone found",
+            description: `Continuing with existing clone: ${existingClones[0].name}`,
+          })
+          
+          return existingClones[0].id
+        }
 
         const { data: clone, error } = await supabase
           .from('clones')
@@ -1616,6 +1968,17 @@ INSTRUCTIONS:
         
         if (clone) {
           setCreatedCloneId(clone.id)
+          
+          // Wait for database consistency before proceeding
+          console.log('Waiting for database consistency after clone creation...')
+          await new Promise(resolve => setTimeout(resolve, 1000))
+          
+          // Verify the clone was actually created
+          const verificationSuccess = await verifyCloneExists(clone.id, 3)
+          if (!verificationSuccess) {
+            console.error('Clone creation verification failed')
+            throw new Error('Clone was created but verification failed. Please try again.')
+          }
           
           // Update formData with the new avatar URL if uploaded
           if (avatarUrl) {
@@ -1654,9 +2017,13 @@ INSTRUCTIONS:
           languages: formData.languages,
         }
 
-        // Update clone directly in Supabase
+        // Update clone directly in Supabase with validation
+        if (!updateData.name?.trim()) {
+          throw new Error('Clone name is required before updating')
+        }
+        
         const supabaseUpdateData = {
-          name: updateData.name,
+          name: updateData.name.trim(),
           professional_title: formData.title,
           bio: updateData.bio,
           credentials_qualifications: formData.credentials.trim() || null,
@@ -2175,11 +2542,44 @@ INSTRUCTIONS:
       case 3:
         return (
           <div className="space-y-6">
-            <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg">
-              <p className="text-green-800 dark:text-green-200 text-sm">
-                ✅ This step is optional. You can skip this section and add knowledge materials later, or proceed to the next step.
-              </p>
-            </div>
+            {/* Knowledge Transfer Status Summary */}
+            {(formData.existingDocuments?.length > 0 || formData.existingLinks?.length > 0) ? (
+              <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg">
+                <div className="flex items-center space-x-2 mb-2">
+                  <CheckCircle className="h-5 w-5 text-blue-600" />
+                  <h3 className="font-medium text-blue-900 dark:text-blue-100">Knowledge Base Loaded</h3>
+                </div>
+                <p className="text-blue-800 dark:text-blue-200 text-sm mb-2">
+                  Found {formData.existingDocuments?.length || 0} documents and {formData.existingLinks?.length || 0} links from your previous setup.
+                </p>
+                {knowledgeProcessingStatus === 'completed' && (
+                  <p className="text-green-700 dark:text-green-300 text-sm font-medium">
+                    ✅ Knowledge processing completed - your clone has enhanced conversation capabilities.
+                  </p>
+                )}
+                {knowledgeProcessingStatus === 'processing' && (
+                  <p className="text-blue-700 dark:text-blue-300 text-sm font-medium">
+                    ⏳ Knowledge processing in progress - this will enhance your clone's responses.
+                  </p>
+                )}
+                {knowledgeProcessingStatus === 'partial' && (
+                  <p className="text-yellow-700 dark:text-yellow-300 text-sm font-medium">
+                    ⚠️ Some knowledge processed successfully - your clone has partial enhanced capabilities.
+                  </p>
+                )}
+                {knowledgeProcessingStatus === 'failed' && (
+                  <p className="text-red-700 dark:text-red-300 text-sm font-medium">
+                    ❌ Knowledge processing failed - your clone will use basic conversation mode.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg">
+                <p className="text-green-800 dark:text-green-200 text-sm">
+                  ✅ This step is optional. You can skip this section and add knowledge materials later, or proceed to the next step.
+                </p>
+              </div>
+            )}
             <Tabs defaultValue="documents" className="w-full">
               <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="documents">Documents</TabsTrigger>
@@ -2187,53 +2587,65 @@ INSTRUCTIONS:
               </TabsList>
 
               <TabsContent value="documents" className="space-y-4">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center space-x-2">
-                      <FileText className="h-5 w-5" />
-                      <span>Upload Documents</span>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-lg p-8 text-center">
+                {/* Enhanced Document Upload with Duplicate Detection */}
+                {createdCloneId ? (
+                  <EnhancedDocumentUpload
+                    cloneId={createdCloneId}
+                    onDocumentUploaded={(document) => {
+                      console.log('Document uploaded successfully:', document)
+                      // Add the uploaded document to formData for processing
+                      setFormData(prev => ({
+                        ...prev,
+                        existingDocuments: [
+                          ...(prev.existingDocuments || []),
+                          {
+                            id: document.id,
+                            name: document.filename,
+                            url: document.upload_url,
+                            status: document.processing_status,
+                            type: 'document'
+                          }
+                        ]
+                      }))
+                      
+                      toast({
+                        title: "Document uploaded",
+                        description: `${document.filename} has been added to your knowledge base`,
+                      })
+                    }}
+                    existingDocuments={formData.existingDocuments}
+                    maxFileSize={10}
+                    allowedExtensions={['.pdf', '.doc', '.docx', '.txt', '.md', '.rtf']}
+                  />
+                ) : (
+                  <Card>
+                    <CardContent className="p-8 text-center">
                       <Upload className="h-12 w-12 text-slate-400 mx-auto mb-4" />
                       <p className="text-lg font-medium text-slate-900 dark:text-white mb-2">
-                        Drag and drop your files here
+                        Complete Basic Information First
                       </p>
-                      <p className="text-slate-600 dark:text-slate-300 mb-4">PDF, DOC, TXT files up to 10MB each</p>
-                      <input
-                        type="file"
-                        multiple
-                        accept=".pdf,.doc,.docx,.txt,.md,.rtf"
-                        onChange={(e) => {
-                          const files = Array.from(e.target.files || [])
-                          console.log('📁 DEBUG: Files selected:', {
-                            filesCount: files.length,
-                            files: files.map(f => ({ name: f.name, size: f.size, type: f.type })),
-                            previousDocuments: formData.documents.length,
-                            newTotal: formData.documents.length + files.length
-                          })
-                          setFormData({
-                            ...formData,
-                            documents: [...formData.documents, ...files]
-                          })
-                          console.log('📁 DEBUG: FormData updated with documents')
-                        }}
-                        className="hidden"
-                        id="file-upload"
-                      />
+                      <p className="text-slate-600 dark:text-slate-300 mb-4">
+                        Please fill out the basic information in Step 1 to enable document upload with duplicate detection.
+                      </p>
                       <Button 
                         variant="outline" 
+                        onClick={() => setCurrentStep(1)}
                         className="bg-transparent"
-                        onClick={() => document.getElementById('file-upload')?.click()}
                       >
-                        Choose Files
+                        Go to Basic Information
                       </Button>
-                    </div>
+                    </CardContent>
+                  </Card>
+                )}
 
-                    {formData.documents.length > 0 && (
-                      <div className="mt-4 space-y-2">
-                        <Label>Uploaded Documents</Label>
+                {/* Legacy file input for compatibility - kept but hidden */}
+                {false && formData.documents.length > 0 && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Legacy Document Queue</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
                         {formData.documents.map((doc, index) => (
                           <div
                             key={index}
@@ -2258,9 +2670,9 @@ INSTRUCTIONS:
                           </div>
                         ))}
                       </div>
-                    )}
-                  </CardContent>
-                </Card>
+                    </CardContent>
+                  </Card>
+                )}
               </TabsContent>
 
               <TabsContent value="links" className="space-y-4">
@@ -2272,11 +2684,77 @@ INSTRUCTIONS:
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
+                    {/* Show existing links if any */}
+                    {formData.existingLinks && formData.existingLinks.length > 0 && (
+                      <div className="mb-6">
+                        <Label className="text-base font-medium">Existing Links</Label>
+                        <div className="mt-2 space-y-2">
+                          {formData.existingLinks.map((linkData, index) => (
+                            <div
+                              key={`existing-link-${linkData.id}`}
+                              className="flex items-center justify-between p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border"
+                            >
+                              <div className="flex items-center space-x-3">
+                                <LinkIcon className="h-4 w-4 text-blue-600" />
+                                <div className="flex-1 min-w-0">
+                                  <span className="text-sm font-medium block truncate">{linkData.name}</span>
+                                  <span className="text-xs text-gray-500 block truncate">{linkData.url}</span>
+                                  <div className="flex items-center space-x-2 mt-1">
+                                    {linkData.status === 'completed' && (
+                                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-green-100 text-green-800">
+                                        <CheckCircle className="h-3 w-3 mr-1" />
+                                        Processed
+                                      </span>
+                                    )}
+                                    {linkData.status === 'processing' && (
+                                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-800">
+                                        <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                                        Processing
+                                      </span>
+                                    )}
+                                    {linkData.status === 'failed' && (
+                                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-red-100 text-red-800">
+                                        <X className="h-3 w-3 mr-1" />
+                                        Failed
+                                      </span>
+                                    )}
+                                    {linkData.status === 'pending' && (
+                                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-800">
+                                        Pending
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center space-x-2">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => window.open(linkData.url, '_blank')}
+                                  className="text-blue-600 hover:text-blue-800"
+                                >
+                                  Visit
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => deleteKnowledgeItem(linkData.id, 'link')}
+                                  className="text-red-600 hover:text-red-800"
+                                >
+                                  <X className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    
                     <div className="flex space-x-2">
                       <Input
                         value={newLink}
                         onChange={(e) => setNewLink(e.target.value)}
-                        placeholder="https://example.com/your-content"
+                        placeholder={formData.existingLinks && formData.existingLinks.length > 0 ? "Add another link..." : "https://example.com/your-content"}
                         onKeyPress={(e) => e.key === "Enter" && addLink()}
                       />
                       <Button onClick={addLink} variant="outline" className="bg-transparent">
@@ -2308,13 +2786,19 @@ INSTRUCTIONS:
             </Tabs>
 
             {/* Enhanced RAG Processing Status */}
-            {(formData.documents.length > 0 || formData.links.length > 0) && (
+            {(formData.documents.length > 0 || formData.links.length > 0 || 
+              (formData.existingDocuments && formData.existingDocuments.length > 0) ||
+              (formData.existingLinks && formData.existingLinks.length > 0)) && (
               <div className="mt-6">
                 <EnhancedProcessingMonitor
                   cloneId={createdCloneId || undefined}
                   status={knowledgeProcessingStatus as 'pending' | 'processing' | 'completed' | 'failed' | 'partial'}
                   processedCount={processingProgress.completed}
-                  totalCount={processingProgress.total || (formData.documents.length + formData.links.length)}
+                  totalCount={
+                    processingProgress.total || 
+                    (formData.documents.length + formData.links.length) ||
+                    ((formData.existingDocuments?.length || 0) + (formData.existingLinks?.length || 0))
+                  }
                   failedCount={processingProgress.errors.length}
                   errors={processingProgress.errors}
                   onRetry={createdCloneId ? () => retryKnowledgeProcessing(createdCloneId) : undefined}
@@ -3495,9 +3979,9 @@ INSTRUCTIONS:
               <Button 
                 onClick={handleNext} 
                 className="w-full sm:w-auto"
-                disabled={isSubmitting || !validateStep(currentStep).isValid}
+                disabled={isSubmitting || isNavigating || !validateStep(currentStep).isValid}
               >
-                {isSubmitting ? 'Saving...' : (
+                {isSubmitting || isNavigating ? 'Saving...' : (
                   <>
                     Next
                     <ArrowRight className="h-4 w-4 ml-2" />
