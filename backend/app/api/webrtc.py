@@ -415,5 +415,5 @@ async def cleanup_inactive_rooms_task():
             logger.error("Room cleanup task error", error=str(e))
             await asyncio.sleep(60)  # Retry after 1 minute on error
 
-# Start cleanup task when the module is imported
-asyncio.create_task(cleanup_inactive_rooms_task())
+# Start cleanup task - this should be called after event loop is running
+# asyncio.create_task(cleanup_inactive_rooms_task())  # Commented out to prevent import-time error

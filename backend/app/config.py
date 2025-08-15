@@ -32,7 +32,8 @@ class Settings(BaseSettings):
     
     # Supabase settings
     SUPABASE_URL: Optional[str] = None
-    SUPABASE_KEY: Optional[str] = None
+    SUPABASE_KEY: Optional[str] = None  # This should be the anon key
+    SUPABASE_ANON_KEY: Optional[str] = None  # Explicit anon key
     SUPABASE_SERVICE_KEY: Optional[str] = None
     SUPABASE_JWT_SECRET: Optional[str] = None  # JWT secret for token verification
     

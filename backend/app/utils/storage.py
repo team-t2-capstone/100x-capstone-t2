@@ -153,7 +153,7 @@ class StorageManager:
             unique_filename = f"{uuid.uuid4()}_{filename}"
             file_path = f"{clone_id}/{unique_filename}"
             
-            result = self.client.storage.from_("documents").upload(
+            result = self.client.storage.from_("knowledge-documents").upload(
                 path=file_path,
                 file=file_data,
                 file_options={"content-type": content_type}
@@ -284,7 +284,7 @@ STORAGE_CONFIG = {
         'allowed_types': ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
         'public': True
     },
-    'documents': {
+    'knowledge-documents': {
         'max_size': 50 * 1024 * 1024,  # 50MB
         'allowed_types': [
             'application/pdf',
@@ -293,7 +293,7 @@ STORAGE_CONFIG = {
             'application/msword',
             'text/markdown'
         ],
-        'public': False
+        'public': True
     },
     'exports': {
         'max_size': 100 * 1024 * 1024,  # 100MB

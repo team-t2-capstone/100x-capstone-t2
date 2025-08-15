@@ -8,8 +8,8 @@ from datetime import datetime
 import uuid
 import structlog
 
-from app.services.rag_integration import RAGIntegrationService, RAGServiceError, process_clone_knowledge, query_clone_expert
-from app.database import get_supabase
+from app.services.rag_integration import RAGIntegrationService, RAGServiceError, process_clone_knowledge_simple, query_clone_expert_simple
+from app.database import get_supabase, get_service_supabase
 from app.models.schemas import RAGProcessingStatus
 from app.config import settings
 
@@ -26,7 +26,7 @@ class RAGWorkflow:
     
     def __init__(self, rag_service: RAGIntegrationService = None):
         self.rag_service = rag_service or RAGIntegrationService()
-        self.supabase = get_supabase()
+        self.supabase = get_service_supabase() or get_supabase()  # Use service client for admin operations
     
     def _get_expert_name(self, clone_name: str, clone_id: str) -> str:
         """Generate consistent expert name for RAG API"""
@@ -35,6 +35,34 @@ class RAGWorkflow:
         # Add clone ID suffix to ensure uniqueness
         expert_name = f"{expert_name}_{clone_id[:8]}"
         return expert_name
+    
+    def _get_memory_type_from_professional_title(self, professional_title: str) -> str:
+        """Map professional title to appropriate memory type for RAG queries"""
+        if not professional_title:
+            return "expert"
+        
+        title_lower = professional_title.lower()
+        
+        # Map different professional titles to memory types
+        # "llm" - Pure LLM without RAG (for general knowledge)
+        # "domain" - Domain-specific knowledge 
+        # "expert" - Expert-specific knowledge (default)
+        # "client" - Client-specific knowledge
+        
+        if any(keyword in title_lower for keyword in [
+            "researcher", "scientist", "analyst", "academic", "professor", "phd"
+        ]):
+            return "domain"  # Use domain knowledge for research/academic roles
+        elif any(keyword in title_lower for keyword in [
+            "consultant", "advisor", "coach", "mentor", "counselor"
+        ]):
+            return "client"  # Use client-specific knowledge for advisory roles
+        elif any(keyword in title_lower for keyword in [
+            "general", "generalist", "assistant", "helper"
+        ]):
+            return "llm"  # Use pure LLM for general assistance roles
+        else:
+            return "expert"  # Default to expert-specific knowledge
     
     def _get_domain_name(self, category: str) -> str:
         """Map clone category to RAG domain name"""
@@ -148,11 +176,15 @@ class RAGWorkflow:
                        expert_name=expert_name,
                        document_count=len(document_urls))
             
-            # Process documents for clone knowledge base
-            processing_status = await process_clone_knowledge(
+            # Process documents for clone knowledge base using simplified function
+            processing_status = await process_clone_knowledge_simple(
                 clone_id=clone_id,
                 clone_name=clone["name"],
-                document_urls=document_urls
+                document_urls=document_urls,
+                clone_category=clone.get("category", "general"),
+                clone_bio=clone.get("bio", ""),
+                personality_traits=clone.get("personality_traits", {}),
+                communication_style=clone.get("communication_style", {})
             )
             
             # Update persona if QA pairs provided (handled within initialize_expert_memory)
@@ -161,21 +193,22 @@ class RAGWorkflow:
                            expert_name=expert_name)
             
             # Update processing status in Supabase
+            processing_status_str = processing_status.get("status", "completed")
             await self._update_documents_processing_status(
                 clone_id=clone_id,
                 document_urls=list(document_urls.keys()),
-                status=processing_status.get("status", "completed")
+                status=processing_status_str
             )
             
             logger.info("Document processing completed",
                        clone_id=clone_id,
-                       status=processing_status.get("status", "completed"))
+                       status=processing_status_str)
             
             # Return compatible RAGProcessingStatus object
             return RAGProcessingStatus(
-                status=processing_status.get("status", "completed"),
-                message=processing_status.get("message", "Processing completed"),
-                expert_name=expert_name
+                status=processing_status_str,
+                message=f"Processing {processing_status_str}. Processed {processing_status.get('processed_documents', 0)} documents.",
+                expert_name=processing_status.get("expert_name", expert_name)
             )
             
         except RAGServiceError as e:
@@ -220,17 +253,25 @@ class RAGWorkflow:
             clone = clone_response.data[0]
             expert_name = self._get_expert_name(clone["name"], clone_id)
             
+            # Determine memory type based on professional title or default to expert
+            memory_type = self._get_memory_type_from_professional_title(
+                clone.get("professional_title", "")
+            )
+            
             logger.info("Querying clone expert",
                        clone_id=clone_id,
                        expert_name=expert_name,
+                       professional_title=clone.get("professional_title", ""),
+                       memory_type=memory_type,
                        query_length=len(user_query))
             
-            # Query expert using direct integration
-            response = await query_clone_expert(
+            # Query expert using simplified direct integration
+            response = await query_clone_expert_simple(
                 clone_id=clone_id,
                 clone_name=clone["name"],
                 query=user_query,
-                memory_type="expert"
+                memory_type=memory_type,
+                thread_id=thread_id
             )
             
             logger.info("Expert query completed",

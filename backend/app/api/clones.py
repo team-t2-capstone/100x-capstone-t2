@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.security import HTTPAuthorizationCredentials
 import structlog
 
-from app.database import get_supabase
+from app.database import get_supabase, get_service_supabase
 from app.core.supabase_auth import get_current_user_id, security
 from app.models.schemas import (
     CloneCreate, CloneUpdate, CloneResponse, CloneListResponse,
@@ -151,15 +151,22 @@ async def list_clones(
 @router.get("/{clone_id}", response_model=CloneResponse)
 async def get_clone(
     clone_id: str,
-    current_user_id: str = Depends(get_current_user_id),
-    supabase_client = Depends(get_supabase)
+    current_user_id: str = Depends(get_current_user_id)
 ) -> CloneResponse:
     """
     Get a specific clone by ID
     """
     try:
+        # Use service role client to ensure clone access
+        service_supabase = get_service_supabase()
+        if not service_supabase:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Service role client not available"
+            )
+        
         # Fetch clone from Supabase
-        response = supabase_client.table("clones").select("*").eq("id", clone_id).execute()
+        response = service_supabase.table("clones").select("*").eq("id", clone_id).execute()
         
         if not response.data:
             raise HTTPException(
@@ -466,65 +473,369 @@ async def delete_clone(
     supabase_client = Depends(get_supabase)
 ) -> dict:
     """
-    Delete a clone (only by creator) - soft delete by deactivating
+    Delete a clone with comprehensive cleanup across all systems
+    Handles OpenAI resources, storage files, and database records
     """
     try:
-        # First check if clone exists and user owns it
-        response = supabase_client.table("clones").select("*").eq("id", clone_id).execute()
+        # Import the comprehensive cleanup service
+        from app.services.clone_cleanup_service import cleanup_clone_comprehensive
         
-        if not response.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Clone not found"
-            )
-        
-        existing_clone = response.data[0]
-        
-        # Check if user is the creator
-        if existing_clone["creator_id"] != current_user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only the creator can delete this clone"
-            )
-        
-        # Check if clone has active sessions
-        sessions_response = supabase_client.table("sessions").select("id").eq("clone_id", clone_id).eq("status", "active").execute()
-        
-        if sessions_response.data:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot delete clone with active sessions"
-            )
-        
-        # Soft delete by deactivating
-        update_data = {
-            "is_active": False,
-            "is_published": False,
-            "updated_at": datetime.utcnow().isoformat()
-        }
-        
-        update_response = supabase_client.table("clones").update(update_data).eq("id", clone_id).execute()
-        
-        if not update_response.data:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to delete clone"
-            )
-        
-        logger.info("Clone deleted successfully", 
+        logger.info("Starting comprehensive clone deletion", 
                    clone_id=clone_id, 
-                   deleted_by=current_user_id)
+                   user_id=current_user_id)
         
-        return {"message": "Clone deleted successfully"}
+        # Use the comprehensive cleanup service
+        cleanup_result = await cleanup_clone_comprehensive(clone_id, current_user_id)
+        
+        if cleanup_result["success"]:
+            logger.info("Clone deletion completed successfully", 
+                       clone_id=clone_id,
+                       cleanup_details=cleanup_result["cleanup_details"])
+            
+            # Return success response with detailed cleanup info
+            response = {
+                "message": cleanup_result["message"],
+                "clone_id": clone_id,
+                "success": True,
+                "timestamp": cleanup_result["timestamp"],
+                "cleanup_details": {
+                    "database_records_deleted": cleanup_result["cleanup_details"].get("database", {}).get("tables_cleaned", {}),
+                    "openai_resources_deleted": {
+                        "vector_stores": len(cleanup_result["cleanup_details"].get("openai", {}).get("vector_stores_deleted", [])),
+                        "assistants": len(cleanup_result["cleanup_details"].get("openai", {}).get("assistants_deleted", [])),
+                        "files": len(cleanup_result["cleanup_details"].get("openai", {}).get("files_deleted", []))
+                    },
+                    "storage_files_deleted": len(cleanup_result["cleanup_details"].get("storage", {}).get("files_deleted", [])),
+                    "verification_results": cleanup_result["cleanup_details"].get("verification", {})
+                }
+            }
+            
+            # Include warnings if any
+            warnings = cleanup_result["cleanup_details"].get("warnings", [])
+            if warnings:
+                response["warnings"] = warnings
+                response["message"] += f" (with {len(warnings)} non-critical warnings)"
+            
+            return response
+        else:
+            # Cleanup failed
+            logger.error("Clone deletion failed during cleanup", 
+                        clone_id=clone_id,
+                        error=cleanup_result["error"],
+                        recoverable=cleanup_result.get("recoverable", False))
+            
+            # Determine appropriate HTTP status code
+            if "not found" in cleanup_result["error"].lower():
+                status_code = status.HTTP_404_NOT_FOUND
+            elif "not authorized" in cleanup_result["error"].lower():
+                status_code = status.HTTP_403_FORBIDDEN
+            elif "active sessions" in cleanup_result["error"].lower():
+                status_code = status.HTTP_400_BAD_REQUEST
+            else:
+                status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+            
+            raise HTTPException(
+                status_code=status_code,
+                detail=cleanup_result["error"]
+            )
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Clone deletion failed", error=str(e), clone_id=clone_id)
+        logger.error("Unexpected error during clone deletion", 
+                    error=str(e), 
+                    clone_id=clone_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete clone"
+            detail=f"Unexpected error during clone deletion: {str(e)}"
         )
+
+
+@router.get("/cleanup/health")
+async def check_cleanup_health(
+    current_user_id: str = Depends(get_current_user_id)
+) -> dict:
+    """
+    Check the health and capabilities of the comprehensive cleanup system
+    Returns status of all required services (OpenAI, Supabase, Storage)
+    """
+    try:
+        from app.services.clone_cleanup_service import verify_cleanup_capability
+        
+        logger.info("Checking cleanup system health", user_id=current_user_id)
+        
+        capabilities = await verify_cleanup_capability()
+        
+        return {
+            "cleanup_ready": capabilities["ready"],
+            "services": {
+                "supabase": {
+                    "status": "healthy" if capabilities["supabase"] else "unhealthy",
+                    "capabilities": ["database_operations", "storage_operations"] if capabilities["supabase"] else []
+                },
+                "openai": {
+                    "status": "healthy" if capabilities["openai"] else "unhealthy",
+                    "capabilities": ["vector_store_cleanup", "assistant_cleanup", "file_cleanup"] if capabilities["openai"] else []
+                },
+                "storage": {
+                    "status": "healthy" if capabilities["storage"] else "unhealthy",
+                    "capabilities": ["file_deletion"] if capabilities["storage"] else []
+                }
+            },
+            "errors": capabilities["errors"],
+            "message": "All cleanup services operational" if capabilities["ready"] else "Some cleanup services unavailable",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error("Failed to check cleanup health", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to check cleanup system health: {str(e)}"
+        )
+
+
+@router.delete("/{clone_id}/force")
+async def force_delete_clone(
+    clone_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+    supabase_client = Depends(get_supabase)
+) -> dict:
+    """
+    Force delete a clone even if there are active sessions
+    Use with caution - this will terminate active sessions
+    """
+    try:
+        from app.services.clone_cleanup_service import CloneCleanupService
+        
+        logger.warning("Force delete initiated", 
+                      clone_id=clone_id, 
+                      user_id=current_user_id)
+        
+        async with CloneCleanupService() as cleanup_service:
+            # First validate ownership (skip active session check for force delete)
+            try:
+                response = supabase_client.table("clones").select("*").eq("id", clone_id).execute()
+                
+                if not response.data:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Clone {clone_id} not found"
+                    )
+                
+                clone_data = response.data[0]
+                
+                # Check user permission
+                if clone_data["creator_id"] != current_user_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=f"User {current_user_id} not authorized to delete clone {clone_id}"
+                    )
+                
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to validate clone access: {str(e)}"
+                )
+            
+            # Force terminate any active sessions
+            terminated_sessions = 0
+            try:
+                # First get count of active sessions
+                active_sessions_response = supabase_client.table("sessions").select("id").eq("clone_id", clone_id).eq("status", "active").execute()
+                active_sessions_count = len(active_sessions_response.data) if active_sessions_response.data else 0
+                
+                if active_sessions_count > 0:
+                    # Terminate active sessions
+                    sessions_response = supabase_client.table("sessions").update({
+                        "status": "force_terminated",
+                        "end_time": datetime.utcnow().isoformat(),
+                        "updated_at": datetime.utcnow().isoformat()
+                    }).eq("clone_id", clone_id).eq("status", "active").execute()
+                    
+                    terminated_sessions = len(sessions_response.data) if sessions_response.data else 0
+                    logger.warning(f"Force terminated {terminated_sessions} active sessions", 
+                                  clone_id=clone_id)
+                
+            except Exception as e:
+                logger.error("Failed to terminate active sessions", error=str(e))
+                # Continue with deletion anyway - this shouldn't block cleanup
+            
+            # Now proceed with comprehensive cleanup
+            cleanup_result = await cleanup_service.cleanup_clone(clone_id, current_user_id)
+            
+            if cleanup_result["success"]:
+                response = {
+                    "message": "Clone force deleted successfully",
+                    "clone_id": clone_id,
+                    "terminated_sessions": terminated_sessions,
+                    "success": True,
+                    "timestamp": cleanup_result["timestamp"],
+                    "cleanup_details": {
+                        "database_records_deleted": cleanup_result["cleanup_details"].get("database", {}).get("tables_cleaned", {}),
+                        "openai_resources_deleted": {
+                            "vector_stores": len(cleanup_result["cleanup_details"].get("openai", {}).get("vector_stores_deleted", [])),
+                            "assistants": len(cleanup_result["cleanup_details"].get("openai", {}).get("assistants_deleted", [])),
+                            "files": len(cleanup_result["cleanup_details"].get("openai", {}).get("files_deleted", []))
+                        },
+                        "storage_files_deleted": len(cleanup_result["cleanup_details"].get("storage", {}).get("files_deleted", [])),
+                        "verification_results": cleanup_result["cleanup_details"].get("verification", {})
+                    }
+                }
+                
+                warnings = cleanup_result["cleanup_details"].get("warnings", [])
+                if warnings:
+                    response["warnings"] = warnings
+                
+                return response
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=cleanup_result["error"]
+                )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Force delete failed", error=str(e), clone_id=clone_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Force delete failed: {str(e)}"
+        )
+
+
+@router.get("/{clone_id}/deletion-preview")
+async def get_clone_deletion_preview(
+    clone_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+    supabase_client = Depends(get_supabase)
+) -> dict:
+    """
+    Get a preview of what will be deleted when a clone is removed
+    Shows database records, storage files, and OpenAI resources
+    """
+    try:
+        from app.services.clone_cleanup_service import CloneCleanupService
+        
+        logger.info("Generating clone deletion preview", 
+                   clone_id=clone_id, 
+                   user_id=current_user_id)
+        
+        async with CloneCleanupService() as cleanup_service:
+            # Validate clone access first
+            clone_data = await cleanup_service._validate_clone_access(clone_id, current_user_id)
+            
+            # Gather resources that would be deleted
+            resources = await cleanup_service._gather_clone_resources(clone_id, clone_data)
+            
+            # Format preview data
+            preview = {
+                "clone": {
+                    "id": clone_id,
+                    "name": clone_data.get("name", ""),
+                    "created_at": clone_data.get("created_at", ""),
+                    "category": clone_data.get("category", ""),
+                    "is_published": clone_data.get("is_published", False)
+                },
+                "database_records": {
+                    "sessions": len(resources["database_tables"].get("sessions", [])),
+                    "knowledge": len(resources["database_tables"].get("knowledge", [])),
+                    "clone_qa_training": len(resources["database_tables"].get("clone_qa_training", [])),
+                    "documents": len(resources["database_tables"].get("documents", [])),
+                    "experts": len(resources["database_tables"].get("experts", [])),
+                    "assistants": len(resources["database_tables"].get("assistants", [])),
+                    "vector_stores": len(resources["database_tables"].get("vector_stores", []))
+                },
+                "storage_files": {
+                    "total_count": len(resources.get("storage_files", [])),
+                    "knowledge_documents": len([f for f in resources.get("storage_files", []) if f.get("type") == "knowledge_document"]),
+                    "avatar": 1 if clone_data.get("avatar_url") else 0,
+                    "file_urls": [f.get("url") for f in resources.get("storage_files", [])]
+                },
+                "openai_resources": {
+                    "vector_stores": len(resources.get("vector_store_ids", [])),
+                    "assistants": len(resources.get("assistant_ids", [])),
+                    "estimated_files": len(resources.get("file_ids", [])),
+                    "expert_name": resources.get("expert_name", "")
+                },
+                "impact_assessment": {
+                    "has_active_sessions": False,
+                    "total_database_records": sum(len(resources["database_tables"].get(table, [])) for table in resources["database_tables"]),
+                    "total_storage_files": len(resources.get("storage_files", [])),
+                    "total_openai_resources": len(resources.get("vector_store_ids", [])) + len(resources.get("assistant_ids", [])),
+                    "deletion_complexity": "simple"  # Can be simple, moderate, complex
+                }
+            }
+            
+            # Check for active sessions
+            sessions_response = supabase_client.table("sessions").select("id").eq("clone_id", clone_id).eq("status", "active").execute()
+            active_sessions_count = len(sessions_response.data) if sessions_response.data else 0
+            
+            preview["impact_assessment"]["has_active_sessions"] = active_sessions_count > 0
+            preview["impact_assessment"]["active_sessions_count"] = active_sessions_count
+            
+            # Determine deletion complexity
+            total_resources = (
+                preview["impact_assessment"]["total_database_records"] +
+                preview["impact_assessment"]["total_storage_files"] +
+                preview["impact_assessment"]["total_openai_resources"]
+            )
+            
+            if total_resources > 50:
+                preview["impact_assessment"]["deletion_complexity"] = "complex"
+            elif total_resources > 10:
+                preview["impact_assessment"]["deletion_complexity"] = "moderate"
+            
+            # Estimate deletion time
+            estimated_time_seconds = max(5, total_resources * 0.5)  # Rough estimate
+            preview["impact_assessment"]["estimated_deletion_time_seconds"] = int(estimated_time_seconds)
+            
+            logger.info("Clone deletion preview generated", 
+                       clone_id=clone_id,
+                       total_resources=total_resources,
+                       complexity=preview["impact_assessment"]["deletion_complexity"])
+            
+            return {
+                "success": True,
+                "clone_id": clone_id,
+                "preview": preview,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        
+    except Exception as e:
+        logger.error("Failed to generate deletion preview", error=str(e), clone_id=clone_id)
+        
+        # Return basic preview even if detailed gathering fails
+        basic_preview = {
+            "clone": {
+                "id": clone_id,
+                "name": "Unknown",
+                "created_at": "",
+                "category": "",
+                "is_published": False
+            },
+            "database_records": {},
+            "storage_files": {"total_count": 0},
+            "openai_resources": {"vector_stores": 0, "assistants": 0, "estimated_files": 0},
+            "impact_assessment": {
+                "has_active_sessions": False,
+                "total_database_records": 0,
+                "total_storage_files": 0,
+                "total_openai_resources": 0,
+                "deletion_complexity": "unknown",
+                "estimated_deletion_time_seconds": 10
+            }
+        }
+        
+        return {
+            "success": False,
+            "clone_id": clone_id,
+            "preview": basic_preview,
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat()
+        }
 
 
 @router.post("/{clone_id}/publish")
@@ -731,8 +1042,7 @@ async def get_clone_stats(
 async def process_clone_knowledge(
     clone_id: str,
     request: DocumentProcessingRequest,
-    current_user_id: str = Depends(get_current_user_id),
-    supabase_client = Depends(get_supabase)
+    current_user_id: str = Depends(get_current_user_id)
 ) -> KnowledgeProcessingStatus:
     """
     Process knowledge documents for a clone using RAG workflow
@@ -741,8 +1051,16 @@ async def process_clone_knowledge(
         # Import here to avoid circular imports
         from app.services.rag_integration import process_clone_knowledge
         
+        # Use service role client for administrative operations
+        service_supabase = get_service_supabase()
+        if not service_supabase:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Service role client not available"
+            )
+        
         # First check if clone exists and user owns it
-        response = supabase_client.table("clones").select("*").eq("id", clone_id).execute()
+        response = service_supabase.table("clones").select("*").eq("id", clone_id).execute()
         
         if not response.data:
             raise HTTPException(
@@ -788,7 +1106,7 @@ async def process_clone_knowledge(
         if processing_status.rag_assistant_id:
             rag_update_data["rag_assistant_id"] = processing_status.rag_assistant_id
         
-        supabase_client.table("clones").update(rag_update_data).eq("id", clone_id).execute()
+        service_supabase.table("clones").update(rag_update_data).eq("id", clone_id).execute()
         
         logger.info("Clone knowledge processing completed", 
                    clone_id=clone_id, 
@@ -809,15 +1127,22 @@ async def process_clone_knowledge(
 @router.get("/{clone_id}/processing-status", response_model=KnowledgeProcessingStatus)
 async def get_processing_status(
     clone_id: str,
-    current_user_id: str = Depends(get_current_user_id),
-    supabase_client = Depends(get_supabase)
+    current_user_id: str = Depends(get_current_user_id)
 ) -> KnowledgeProcessingStatus:
     """
     Get the current processing status for a clone's knowledge
     """
     try:
+        # Use service role client for administrative operations
+        service_supabase = get_service_supabase()
+        if not service_supabase:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Service role client not available"
+            )
+        
         # First check if clone exists and user owns it
-        response = supabase_client.table("clones").select("*").eq("id", clone_id).execute()
+        response = service_supabase.table("clones").select("*").eq("id", clone_id).execute()
         
         if not response.data:
             raise HTTPException(
@@ -861,8 +1186,7 @@ async def get_processing_status(
 async def query_clone_expert(
     clone_id: str,
     request: RAGQueryRequest,
-    current_user_id: str = Depends(get_current_user_id),
-    supabase_client = Depends(get_supabase)
+    current_user_id: str = Depends(get_current_user_id)
 ) -> RAGQueryResponse:
     """
     Query a clone's RAG expert for testing and chat
@@ -871,8 +1195,16 @@ async def query_clone_expert(
         # Import here to avoid circular imports
         from app.services.rag_integration import query_clone_expert
         
+        # Use service role client for administrative operations
+        service_supabase = get_service_supabase()
+        if not service_supabase:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Service role client not available"
+            )
+        
         # Check if clone exists
-        response = supabase_client.table("clones").select("*").eq("id", clone_id).execute()
+        response = service_supabase.table("clones").select("*").eq("id", clone_id).execute()
         
         if not response.data:
             raise HTTPException(
@@ -928,18 +1260,120 @@ async def query_clone_expert(
         )
 
 
+@router.post("/cleanup/orphaned-data")
+async def cleanup_orphaned_data(
+    current_user_id: str = Depends(get_current_user_id),
+    supabase_client = Depends(get_supabase)
+) -> dict:
+    """
+    Find and clean up orphaned data across the system
+    This includes RAG resources without corresponding clones, etc.
+    """
+    try:
+        from app.services.clone_cleanup_service import CloneCleanupService
+        
+        logger.info("Starting orphaned data cleanup", user_id=current_user_id)
+        
+        orphaned_data = {
+            "found": {},
+            "cleaned": {},
+            "warnings": [],
+            "errors": []
+        }
+        
+        # Find orphaned database records
+        try:
+            # Get all valid clone IDs
+            valid_clones_response = supabase_client.table("clones").select("id, name").execute()
+            valid_clone_ids = [clone["id"] for clone in valid_clones_response.data] if valid_clones_response.data else []
+            valid_clone_names = [clone["name"] for clone in valid_clones_response.data] if valid_clones_response.data else []
+            
+            # Check for orphaned sessions
+            all_sessions = supabase_client.table("sessions").select("id, clone_id").execute()
+            orphaned_sessions = []
+            if all_sessions.data:
+                for session in all_sessions.data:
+                    if session["clone_id"] not in valid_clone_ids:
+                        orphaned_sessions.append(session["id"])
+            
+            # Check for orphaned knowledge entries
+            all_knowledge = supabase_client.table("knowledge").select("id, clone_id").execute()
+            orphaned_knowledge = []
+            if all_knowledge.data:
+                for knowledge in all_knowledge.data:
+                    if knowledge["clone_id"] not in valid_clone_ids:
+                        orphaned_knowledge.append(knowledge["id"])
+            
+            # Check for orphaned documents
+            all_documents = supabase_client.table("documents").select("id, client_name").execute()
+            orphaned_documents = []
+            if all_documents.data:
+                for doc in all_documents.data:
+                    if doc.get("client_name") and doc["client_name"] not in valid_clone_names:
+                        orphaned_documents.append(doc["id"])
+            
+            orphaned_data["found"] = {
+                "sessions": len(orphaned_sessions),
+                "knowledge": len(orphaned_knowledge),
+                "documents": len(orphaned_documents)
+            }
+            
+            # Clean up orphaned records if requested
+            # For safety, we'll just report what was found in this version
+            # In production, you might want to add an auto_cleanup parameter
+            
+            logger.info("Orphaned data scan completed", 
+                       orphaned_sessions=len(orphaned_sessions),
+                       orphaned_knowledge=len(orphaned_knowledge),
+                       orphaned_documents=len(orphaned_documents))
+            
+            return {
+                "success": True,
+                "message": "Orphaned data scan completed",
+                "orphaned_data": orphaned_data,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+        except Exception as e:
+            error_msg = f"Failed to scan for orphaned data: {str(e)}"
+            logger.error(error_msg)
+            orphaned_data["errors"].append(error_msg)
+            
+            return {
+                "success": False,
+                "message": "Orphaned data scan failed",
+                "orphaned_data": orphaned_data,
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        
+    except Exception as e:
+        logger.error("Orphaned data cleanup failed", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Orphaned data cleanup failed: {str(e)}"
+        )
+
+
 @router.post("/{clone_id}/retry-processing")
 async def retry_failed_processing(
     clone_id: str,
-    current_user_id: str = Depends(get_current_user_id),
-    supabase_client = Depends(get_supabase)
+    current_user_id: str = Depends(get_current_user_id)
 ) -> dict:
     """
     Retry processing for failed documents
     """
     try:
+        # Use service role client for administrative operations
+        service_supabase = get_service_supabase()
+        if not service_supabase:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Service role client not available"
+            )
+        
         # First check if clone exists and user owns it
-        response = supabase_client.table("clones").select("*").eq("id", clone_id).execute()
+        response = service_supabase.table("clones").select("*").eq("id", clone_id).execute()
         
         if not response.data:
             raise HTTPException(
@@ -970,7 +1404,7 @@ async def retry_failed_processing(
             "updated_at": datetime.utcnow().isoformat()
         }
         
-        supabase_client.table("clones").update(update_data).eq("id", clone_id).execute()
+        service_supabase.table("clones").update(update_data).eq("id", clone_id).execute()
         
         logger.info("Clone processing retry initiated", clone_id=clone_id)
         

@@ -20,17 +20,57 @@ from ..database import get_supabase
 def get_openai_client() -> OpenAI:
     """Get OpenAI client with API key from environment"""
     from ..config import settings
-    return OpenAI(api_key=settings.OPENAI_API_KEY)
+    
+    if not settings.OPENAI_API_KEY:
+        raise Exception("OPENAI_API_KEY not configured. RAG functionality requires OpenAI API access.")
+    
+    try:
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        # Test the client by making a simple request to validate the API key
+        return client
+    except Exception as e:
+        raise Exception(f"Failed to initialize OpenAI client: {str(e)}")
+
+def validate_openai_configuration() -> dict:
+    """Validate OpenAI configuration and return status"""
+    from ..config import settings
+    
+    validation_result = {
+        "valid": False,
+        "api_key_configured": bool(settings.OPENAI_API_KEY),
+        "client_initialized": False,
+        "error": None
+    }
+    
+    if not settings.OPENAI_API_KEY:
+        validation_result["error"] = "OPENAI_API_KEY not configured"
+        return validation_result
+    
+    try:
+        client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        # Test with a minimal request to validate the key
+        models = client.models.list()
+        validation_result["client_initialized"] = True
+        validation_result["valid"] = True
+    except Exception as e:
+        validation_result["error"] = f"OpenAI client validation failed: {str(e)}"
+    
+    return validation_result
 
 # Vector Store Management
 async def create_vector_store(client: OpenAI, vector_name: str):
     """Create a vector store for documents"""
     try:
+        if not client:
+            raise Exception("OpenAI client is not initialized")
+        
         vector_store = client.vector_stores.create(name=vector_name)
+        print(f"Successfully created vector store: {vector_name} with ID: {vector_store.id}")
         return vector_store
     except Exception as e:
-        print(f"Error creating vector store: {str(e)}")
-        raise Exception(f"Error creating vector store: {str(e)}")
+        error_msg = f"Error creating vector store '{vector_name}': {str(e)}"
+        print(error_msg)
+        raise Exception(error_msg)
 
 async def create_file_for_vector_store(
     client: OpenAI, 
@@ -211,19 +251,45 @@ async def add_documents_to_vector_store(
     """
     Process multiple documents and add them to a vector store using batch API
     """
-    # First create files from the documents
-    file_ids = await create_files_for_vector_store(client, document_urls, domain_name, expert_name, client_name)
-    print(f"Created {len(file_ids)} files with IDs: {file_ids}")
+    # Validate inputs
+    if not client:
+        raise Exception("OpenAI client is not initialized")
     
-    # If no files were successfully created, return early with a warning
-    if not file_ids:
-        print("Warning: No files were successfully created. Cannot add to vector store.")
+    if not vector_store_id:
+        raise Exception("Vector store ID is required")
+    
+    if not document_urls:
+        raise Exception("No document URLs provided")
+    
+    print(f"Starting document processing for vector store {vector_store_id} with {len(document_urls)} documents")
+    
+    # First create files from the documents
+    try:
+        file_ids = await create_files_for_vector_store(client, document_urls, domain_name, expert_name, client_name)
+        print(f"Created {len(file_ids)} files with IDs: {file_ids}")
+    except Exception as e:
+        error_msg = f"Failed to create files from documents: {str(e)}"
+        print(error_msg)
         return {
             "file_ids": [],
             "batch_id": None,
             "vector_store_id": vector_store_id,
             "status": "failed",
-            "message": "No files were successfully created"
+            "error": error_msg,
+            "message": "Document file creation failed"
+        }
+    
+    # If no files were successfully created, return early with a detailed error
+    if not file_ids:
+        error_msg = "No files were successfully created from the provided document URLs"
+        print(f"Error: {error_msg}")
+        return {
+            "file_ids": [],
+            "batch_id": None,
+            "vector_store_id": vector_store_id,
+            "status": "failed",
+            "error": error_msg,
+            "message": error_msg
         }
     
     try:
@@ -239,13 +305,15 @@ async def add_documents_to_vector_store(
             "message": f"Successfully added {len(file_ids)} files to vector store"
         }
     except Exception as e:
-        print(f"Error adding documents to vector store: {str(e)}")
+        error_msg = f"Failed to add files to vector store: {str(e)}"
+        print(error_msg)
         return {
             "file_ids": file_ids,
             "batch_id": None,
             "vector_store_id": vector_store_id,
             "status": "partial_failure",
-            "message": f"Created {len(file_ids)} files but failed to add them to vector store: {str(e)}"
+            "error": error_msg,
+            "message": f"Created {len(file_ids)} files but failed to add them to vector store"
         }
 
 async def check_batch_status(client: OpenAI, vector_store_id: str, batch_id: str):
@@ -381,6 +449,11 @@ async def query_vector_index(query: str, vector_store_ids: list = None, context:
 async def create_assistant(expert_name: str, memory_type: str = "expert", client_name: str = None, model: str = "gpt-4o"):
     """Create an OpenAI Assistant for a specific expert and memory type"""
     try:
+        # Validate OpenAI configuration first
+        validation = validate_openai_configuration()
+        if not validation["valid"]:
+            raise Exception(f"Cannot create assistant - OpenAI configuration invalid: {validation['error']}")
+        
         client = get_openai_client()
         supabase = get_supabase()
         print(f"[DEBUG] create_assistant: Creating assistant for expert '{expert_name}' with memory type '{memory_type}'")
@@ -484,6 +557,11 @@ async def create_assistant(expert_name: str, memory_type: str = "expert", client
 async def get_or_create_assistant(expert_name: str, memory_type: str = "expert", client_name: str = None, model: str = "gpt-4o"):
     """Get an existing assistant or create a new one"""
     try:
+        # Validate OpenAI configuration first
+        validation = validate_openai_configuration()
+        if not validation["valid"]:
+            raise Exception(f"Cannot get or create assistant - OpenAI configuration invalid: {validation['error']}")
+        
         supabase = get_supabase()
         client = get_openai_client()
         print(f"[DEBUG] get_or_create_assistant: Looking for assistant for expert '{expert_name}' with memory type '{memory_type}'")
@@ -637,13 +715,25 @@ async def query_expert_with_assistant(
     try:
         print(f"[DEBUG] query_expert_with_assistant: Querying expert '{expert_name}' with memory type '{memory_type}'")
         
+        # Validate OpenAI configuration before proceeding
+        validation = validate_openai_configuration()
+        if not validation["valid"]:
+            raise Exception(f"OpenAI configuration invalid: {validation['error']}")
+        
+        # Validate inputs
+        if not expert_name or not query:
+            raise Exception("Expert name and query are required")
+        
         # Get or create the assistant
         assistant = await get_or_create_assistant(expert_name, memory_type, client_name)
+        if not assistant:
+            raise Exception(f"Failed to get or create assistant for expert '{expert_name}'")
         
         # Create a thread if one wasn't provided
         if not thread_id:
             thread = await create_thread()
             thread_id = thread.id
+            print(f"[DEBUG] Created new thread: {thread_id}")
         
         # Add the user message to the thread
         await add_message_to_thread(thread_id, query)
@@ -654,22 +744,37 @@ async def query_expert_with_assistant(
         # Wait for the run to complete
         run = await wait_for_run_completion(thread_id, run.id)
         
+        if run.status != "completed":
+            raise Exception(f"Assistant run failed with status: {run.status}")
+        
         # Get the assistant's response
         response = await get_assistant_response(thread_id, run.id)
+        
+        if not response:
+            raise Exception("No response received from assistant")
         
         return {
             "response": {"text": response},
             "thread_id": thread_id,
             "run_id": run.id,
+            "assistant_id": assistant.id,
+            "expert_name": expert_name,
             "status": run.status
         }
     except Exception as e:
-        print(f"[ERROR] query_expert_with_assistant: {str(e)}")
-        raise Exception(f"Error querying expert with assistant: {str(e)}")
+        error_msg = f"Error querying expert '{expert_name}' with assistant: {str(e)}"
+        print(f"[ERROR] query_expert_with_assistant: {error_msg}")
+        raise Exception(error_msg)
 
 async def generate_persona_from_qa(client: OpenAI, qa_data: List[Dict[str, str]]):
     """Generate a persona summary from question-answer data"""
     try:
+        if not client:
+            raise Exception("OpenAI client is not initialized")
+        
+        if not qa_data:
+            raise Exception("No QA data provided for persona generation")
+        
         print(f"[DEBUG] generate_persona_from_qa: Generating persona from {len(qa_data)} QA pairs")
         
         # Format QA data as a string

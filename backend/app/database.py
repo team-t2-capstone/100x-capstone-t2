@@ -94,8 +94,60 @@ async def close_database():
 
 
 def get_supabase() -> Optional[Client]:
-    """Dependency to get Supabase client"""
+    """Dependency to get Supabase client (service role)"""
     return db_manager.get_supabase()
+
+
+def get_service_supabase() -> Optional[Client]:
+    """
+    Get Supabase client with service role that bypasses RLS
+    Use this for administrative operations like RAG processing
+    """
+    if not SUPABASE_AVAILABLE or not settings.SUPABASE_URL or not settings.SUPABASE_SERVICE_KEY:
+        return None
+    
+    try:
+        client = create_client(
+            settings.SUPABASE_URL,
+            settings.SUPABASE_SERVICE_KEY
+        )
+        return client
+    except Exception as e:
+        logger.error("Failed to create service Supabase client", error=str(e))
+        return None
+
+
+def get_authenticated_supabase(authorization: str = None) -> Optional[Client]:
+    """
+    Create an authenticated Supabase client with user's JWT token
+    This respects Row Level Security (RLS) policies
+    """
+    if not SUPABASE_AVAILABLE or not settings.SUPABASE_URL:
+        return None
+    
+    try:
+        if authorization and authorization.startswith('Bearer '):
+            # Create client with user's JWT token for RLS (use anon key for proper RLS)
+            anon_key = getattr(settings, 'SUPABASE_ANON_KEY', None) or settings.SUPABASE_KEY
+            client = create_client(
+                settings.SUPABASE_URL,
+                anon_key,  # Use anon key for user client to respect RLS
+                options={
+                    "global": {
+                        "headers": {
+                            "Authorization": authorization
+                        }
+                    }
+                }
+            )
+            return client
+        else:
+            # Fallback to service role if no auth header
+            return db_manager.get_supabase()
+            
+    except Exception as e:
+        logger.error("Failed to create authenticated Supabase client", error=str(e))
+        return db_manager.get_supabase()
 
 
 async def get_db_session():

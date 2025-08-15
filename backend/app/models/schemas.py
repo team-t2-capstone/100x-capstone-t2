@@ -161,9 +161,35 @@ class DocumentResponse(DocumentBase):
     doc_metadata: Dict[str, Any] = {}
     upload_date: datetime
     processed_date: Optional[datetime] = None
+    content_hash: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+class DuplicateCheckRequest(BaseModel):
+    """Request model for checking document duplicates"""
+    clone_id: str
+    filename: str
+    file_size: int
+    content_hash: Optional[str] = None
+
+
+class ExistingDocumentInfo(BaseModel):
+    """Information about an existing document"""
+    id: str
+    filename: str
+    processing_status: str
+    created_at: str
+    match_type: str  # 'filename' | 'content_hash' | 'size_and_name'
+
+
+class DuplicateCheckResponse(BaseModel):
+    """Response model for duplicate check results"""
+    is_duplicate: bool
+    existing_document: Optional[ExistingDocumentInfo] = None
+    message: str
+    allow_overwrite: bool = True
 
 
 class KnowledgeEntryCreate(BaseModel):
