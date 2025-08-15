@@ -64,6 +64,39 @@ export interface KnowledgeSearchResult {
   search_time_ms: number;
 }
 
+export interface ProcessingResult {
+  status: 'success' | 'failed';
+  message: string;
+  clone_id?: string;
+  assistant_id?: string;
+  vector_store_id?: string;
+  processed_documents?: number;
+  error?: string;
+  retryable?: boolean;
+}
+
+export interface RetryResult {
+  status: 'success' | 'failed' | 'in_progress';
+  message: string;
+  clone_id: string;
+  assistant_id?: string;
+  processed_documents?: number;
+  error?: string;
+  retryable?: boolean;
+  retry_count?: number;
+  overall_status?: 'completed' | 'failed' | 'partial' | 'processing';
+}
+
+// Simplified error handling types
+export interface ApiError {
+  type: 'connection' | 'auth' | 'processing' | 'validation' | 'configuration';
+  message: string;
+  details?: string;
+  suggestion?: string;
+  retryable: boolean;
+  status_code: number;
+}
+
 export class KnowledgeApi {
   private getHeaders(includeContentType = true) {
     const { accessToken } = getAuthTokens();
@@ -113,12 +146,11 @@ export class KnowledgeApi {
       throw new Error(error.detail || `Failed to fetch documents: ${response.status}`);
     }
 
-    const data = await response.json();
-    return data.documents || data; // Handle different response formats
+    return response.json();
   }
 
-  async getDocument(cloneId: string, documentId: string): Promise<DocumentResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/v1/clones/${cloneId}/documents/${documentId}`, {
+  async getDocument(documentId: string): Promise<DocumentResponse> {
+    const response = await fetch(`${API_BASE_URL}/api/v1/documents/${documentId}`, {
       headers: this.getHeaders(),
     });
 
@@ -130,8 +162,8 @@ export class KnowledgeApi {
     return response.json();
   }
 
-  async deleteDocument(cloneId: string, documentId: string): Promise<void> {
-    const response = await fetch(`${API_BASE_URL}/api/v1/clones/${cloneId}/documents/${documentId}`, {
+  async deleteDocument(documentId: string): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/api/v1/documents/${documentId}`, {
       method: 'DELETE',
       headers: this.getHeaders(),
     });
@@ -256,6 +288,159 @@ export class KnowledgeApi {
 
     return response.json();
   }
+
+  /**
+   * Process knowledge documents for a clone using simplified OpenAI RAG
+   */
+  async processKnowledge(cloneId: string): Promise<ProcessingResult> {
+    const response = await fetch(`${API_BASE_URL}/api/v1/clones/${cloneId}/process-batch`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+    });
+
+    const responseText = await response.text();
+    let result: ProcessingResult;
+
+    try {
+      result = JSON.parse(responseText);
+    } catch (parseError) {
+      throw this.createApiError(
+        'processing',
+        'Invalid response from server',
+        responseText.substring(0, 200),
+        false,
+        response.status
+      );
+    }
+
+    if (!response.ok) {
+      throw this.createApiError(
+        'processing',
+        result.error || result.message || 'Processing failed',
+        result.error,
+        true, // Simplified service should be retryable
+        response.status
+      );
+    }
+
+    return result;
+  }
+
+  /**
+   * Retry processing for a clone
+   */
+  async retryProcessing(cloneId: string, retryCount: number = 1): Promise<RetryResult> {
+    const response = await fetch(`${API_BASE_URL}/api/v1/clones/${cloneId}/retry-processing`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ retry_count: retryCount })
+    });
+
+    const responseText = await response.text();
+    let result: RetryResult;
+
+    try {
+      result = JSON.parse(responseText);
+    } catch (parseError) {
+      throw this.createApiError(
+        'processing',
+        'Invalid response from server',
+        responseText.substring(0, 200),
+        false,
+        response.status
+      );
+    }
+
+    if (!response.ok) {
+      throw this.createApiError(
+        'processing',
+        result.message || 'Retry failed',
+        result.error,
+        true, // Simplified service should be retryable
+        response.status
+      );
+    }
+
+    return result;
+  }
+
+  /**
+   * Process knowledge with simple retry logic
+   */
+  async processKnowledgeWithRetry(
+    cloneId: string, 
+    maxRetries: number = 2
+  ): Promise<ProcessingResult> {
+    let lastError: ApiError | null = null;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`Processing attempt ${attempt}/${maxRetries} for clone ${cloneId}`);
+        const result = await this.processKnowledge(cloneId);
+        
+        // Success - return result
+        return result;
+        
+      } catch (error) {
+        lastError = error as ApiError;
+        console.error(`Attempt ${attempt} failed:`, lastError.message);
+        
+        // Don't retry if error is not retryable or if it's the last attempt
+        if (!lastError.retryable || attempt === maxRetries) {
+          break;
+        }
+        
+        // Simple delay: 3s between retries
+        const delay = 3000;
+        console.log(`Waiting ${delay}ms before retry...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+
+    // All attempts failed
+    throw lastError || new Error('Processing failed after all retry attempts');
+  }
+
+  /**
+   * Create standardized API error
+   */
+  private createApiError(
+    type: ApiError['type'],
+    message: string,
+    details?: string,
+    retryable: boolean = false,
+    status_code: number = 500,
+    suggestion?: string
+  ): ApiError {
+    return {
+      type,
+      message,
+      details,
+      suggestion,
+      retryable,
+      status_code
+    };
+  }
+
+  /**
+   * Get user-friendly error message
+   */
+  getUserFriendlyError(error: ApiError): string {
+    switch (error.type) {
+      case 'connection':
+        return 'Unable to connect to processing service. Please check your internet connection.';
+      case 'auth':
+        return 'Authentication failed. Please refresh the page and log in again.';
+      case 'processing':
+        return 'Document processing failed. This may be temporary - please try again.';
+      case 'validation':
+        return 'Invalid request data. Please refresh the page and try again.';
+      case 'configuration':
+        return 'Service configuration error. Please contact support if this persists.';
+      default:
+        return error.suggestion || error.message;
+    }
+  }
 }
 
 // Export singleton instance
@@ -276,3 +461,22 @@ export const getDocuments = (cloneId: string) =>
 
 export const processUrl = (cloneId: string, url: string, title?: string) => 
   knowledgeApi.processUrlContent(cloneId, url, title);
+
+// Enhanced processing functions
+export const processKnowledge = (cloneId: string) => 
+  knowledgeApi.processKnowledge(cloneId);
+
+export const retryProcessing = (cloneId: string) => 
+  knowledgeApi.retryProcessing(cloneId);
+
+export const processKnowledgeWithRetry = (cloneId: string, maxRetries?: number) => 
+  knowledgeApi.processKnowledgeWithRetry(cloneId, maxRetries);
+
+// Error handling helper
+export const getUserFriendlyError = (error: ApiError) => 
+  knowledgeApi.getUserFriendlyError(error);
+
+// Type guards
+export const isApiError = (error: any): error is ApiError => {
+  return error && typeof error.type === 'string' && typeof error.retryable === 'boolean';
+};

@@ -15,22 +15,23 @@ interface CloneCreateRequest {
   languages: string[];
 }
 // Removed complex knowledge-api - now using direct Supabase operations
-import { supabase } from '@/lib/supabase'
-import { useAuth } from '@/contexts/auth-context'
-import { getAuthTokens } from '@/lib/api-client'
-import { setupStorageBuckets, checkStorageBuckets } from '@/lib/setup-storage'
-import { toast } from '@/components/ui/use-toast'
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Progress } from "@/components/ui/progress"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Slider } from "@/components/ui/slider"
+import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/auth-context';
+import { getAuthTokens } from '@/lib/api-client';
+import { setupStorageBuckets, checkStorageBuckets } from '@/lib/setup-storage';
+import { toast } from '@/components/ui/use-toast';
+import { EnhancedProcessingMonitor } from '@/components/processing/enhanced-processing-monitor';
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Progress } from "@/components/ui/progress";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Slider } from "@/components/ui/slider";
 import {
   ArrowLeft,
   ArrowRight,
@@ -52,9 +53,10 @@ import {
   Plus,
   Cpu,
   MoreHorizontal,
-} from "lucide-react"
-import Link from "next/link"
-import { motion, AnimatePresence } from "framer-motion"
+  RefreshCw,
+} from "lucide-react";
+import Link from "next/link";
+import { motion, AnimatePresence } from "framer-motion";
 
 const expertTypes = {
   medical: { color: "bg-emerald-500", icon: Stethoscope, name: "Health & Wellness", theme: "emerald" },
@@ -132,6 +134,7 @@ function CloneWizardContent() {
   // RAG processing state
   const [isProcessingKnowledge, setIsProcessingKnowledge] = useState(false)
   const [knowledgeProcessingStatus, setKnowledgeProcessingStatus] = useState<string>('pending')
+  const [retryCount, setRetryCount] = useState(0)
   const [processingProgress, setProcessingProgress] = useState<{ completed: number; total: number; errors: string[] }>({ completed: 0, total: 0, errors: [] })
   const [formData, setFormData] = useState({
     // Step 1: Basic Information
@@ -312,15 +315,33 @@ function CloneWizardContent() {
     }
   }
   const [isTestingClone, setIsTestingClone] = useState(false)
+  const [testingMode, setTestingMode] = useState<'text' | 'audio' | 'video'>('text')
+  const [isRecording, setIsRecording] = useState(false)
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null)
   const [testMessages, setTestMessages] = useState([
     {
       id: "1",
-      content:
-        "Hello! I'm your AI clone. I'm ready to help with questions about life coaching and personal development. What would you like to discuss?",
+      content: "Hello! I'm your AI clone. I'm ready to help with your questions. What would you like to discuss?",
       sender: "clone" as "user" | "clone",
       timestamp: new Date(),
     },
   ])
+
+  // Update greeting message when expertise changes
+  useEffect(() => {
+    const domain = formData.expertise === 'other' ? formData.customDomain : formData.expertise
+    const greeting = domain 
+      ? `Hello! I'm your AI clone. I'm ready to help with questions about ${domain}. What would you like to discuss?`
+      : "Hello! I'm your AI clone. I'm ready to help with your questions. What would you like to discuss?"
+    
+    setTestMessages(prev => [
+      {
+        ...prev[0],
+        content: greeting
+      },
+      ...prev.slice(1)
+    ])
+  }, [formData.expertise, formData.customDomain])
   const [testInput, setTestInput] = useState("")
 
   // Calculate progress based on sections completed
@@ -483,12 +504,20 @@ INSTRUCTIONS:
       if (createdCloneId && knowledgeProcessingStatus === 'completed' && (formData.documents.length > 0 || formData.links.length > 0)) {
         console.log('Using RAG-powered testing for clone:', createdCloneId)
         
+        // Get current Supabase session for authentication
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+        
+        if (sessionError || !session) {
+          console.error('Failed to get Supabase session:', sessionError)
+          throw new Error('Authentication session expired. Please refresh the page and try again.')
+        }
+
         // Use RAG endpoint for enhanced responses
         const response = await fetch(`/api/clones/${createdCloneId}/query`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${getAuthTokens().accessToken}`,
+            'Authorization': `Bearer ${session.access_token}`,
           },
           body: JSON.stringify({
             query: userMessage,
@@ -579,21 +608,144 @@ INSTRUCTIONS:
   }
 
   // RAG Knowledge Processing Function
+  const retryKnowledgeProcessing = async (cloneId: string) => {
+    if (!cloneId) return
+    
+    setIsProcessingKnowledge(true)
+    setKnowledgeProcessingStatus('processing')
+    setRetryCount(prev => prev + 1)
+    
+    try {
+      console.log('Starting knowledge processing retry for clone:', cloneId)
+      
+      // Show retry notification
+      toast({
+        title: "Retrying Processing...",
+        description: `Attempting to process failed documents (Attempt ${retryCount})`,
+      })
+      
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session?.access_token) {
+        throw new Error('No authentication session found')
+      }
+
+      console.log('Using Supabase access token for retry processing')
+
+      // Call the dedicated retry endpoint
+      const response = await fetch(`/api/clones/${cloneId}/retry-processing`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ retry_count: retryCount })
+      })
+
+      console.log('Retry processing response status:', response.status, response.statusText)
+      
+      if (!response.ok) {
+        let errorData;
+        const responseText = await response.text()
+        console.log('Retry processing error response:', responseText)
+        
+        try {
+          errorData = JSON.parse(responseText)
+        } catch (parseError) {
+          throw new Error(`Retry failed with ${response.status}: ${responseText.substring(0, 200)}`)
+        }
+        
+        throw new Error(errorData.detail || errorData.error || `Retry failed: ${response.status}`)
+      }
+
+      const result = JSON.parse(await response.text())
+      console.log('Retry processing result:', result)
+
+      if (result.overall_status === 'completed') {
+        setKnowledgeProcessingStatus('completed')
+        setRetryCount(0) // Reset retry count on success
+        toast({
+          title: "✅ Retry Successful!",
+          description: "Your documents have been successfully processed and integrated into your clone.",
+        })
+      } else if (result.overall_status === 'failed') {
+        setKnowledgeProcessingStatus('failed')
+        toast({
+          title: `❌ Retry Failed (Attempt ${retryCount})`,
+          description: retryCount >= 3 
+            ? "Multiple retry attempts failed. Documents may have format issues. Continuing with basic mode."
+            : "RAG processing failed - you can try again or continue with basic LLM mode for testing",
+          variant: "destructive",
+        })
+      } else {
+        setKnowledgeProcessingStatus('partial')
+        toast({
+          title: "⚠️ Partial Retry Success",
+          description: "Some documents were processed successfully on retry, but others still failed.",
+          variant: "destructive",
+        })
+      }
+
+    } catch (error) {
+      console.error('Retry processing error:', error)
+      setKnowledgeProcessingStatus('failed')
+      
+      toast({
+        title: `🔧 Retry Error (Attempt ${retryCount})`,
+        description: error instanceof Error 
+          ? `${error.message} - You can try again or continue with basic mode.`
+          : "Retry failed due to an unexpected error. Continuing with basic LLM mode for testing.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsProcessingKnowledge(false)
+    }
+  }
+
   const processKnowledgeWithRAG = async (cloneId: string) => {
+    console.log('🔍 DEBUG: Starting RAG processing with formData:', {
+      documentsCount: formData.documents.length,
+      linksCount: formData.links.length,
+      documents: formData.documents.map(doc => ({ name: doc.name, size: doc.size, type: doc.type })),
+      links: formData.links,
+      cloneId
+    })
+
     if (formData.documents.length === 0 && formData.links.length === 0) {
-      console.log('No documents or links to process')
+      console.log('❌ No documents or links to process')
       return
     }
 
     try {
       setIsProcessingKnowledge(true)
       setKnowledgeProcessingStatus('processing')
+      setRetryCount(0) // Reset retry count when starting fresh processing
       setProcessingProgress({ completed: 0, total: formData.documents.length + formData.links.length, errors: [] })
 
       console.log('Starting RAG processing for clone:', cloneId)
       console.log('Clone ID type:', typeof cloneId)
       console.log('Clone ID length:', cloneId?.length)
       console.log('Clone ID is valid UUID:', /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cloneId))
+
+      // Validate clone ID format
+      if (!cloneId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cloneId)) {
+        throw new Error(`Invalid clone ID format: ${cloneId}`)
+      }
+
+      // Double-check clone exists before processing
+      console.log('Verifying clone exists in database...')
+      const { data: cloneCheck, error: cloneError } = await supabase
+        .from('clones')
+        .select('id, name, creator_id')
+        .eq('id', cloneId)
+        .single()
+
+      if (cloneError || !cloneCheck) {
+        console.error('Clone verification failed in RAG processing:', { cloneError, cloneId })
+        throw new Error(`Clone not found in database: ${cloneId}. Error: ${cloneError?.message || 'Unknown'}`)
+      }
+
+      console.log('Clone verified successfully:', cloneCheck)
 
       // Check if required tables exist before proceeding
       const tablesExist = await ensureTablesExist()
@@ -642,14 +794,17 @@ INSTRUCTIONS:
               console.error('Failed to store document in knowledge table:', knowledgeError)
             }
 
-            // Also store in documents table for RAG processing
-            const { error: docError } = await supabase.from('documents').insert({
+            // Also store in documents table for RAG processing using upsert
+            const { error: docError } = await supabase.from('documents').upsert({
               name: doc.name,
               document_link: fileUrl,
               created_by: user?.id,
               domain: cloneDomain,
               included_in_default: false,
               client_name: formData.name // Use clone name as client name
+            }, {
+              onConflict: 'name',
+              ignoreDuplicates: false
             })
 
             if (docError) {
@@ -696,14 +851,17 @@ INSTRUCTIONS:
             console.error('Failed to store URL in knowledge table:', knowledgeError)
           }
 
-          // Also store in documents table for RAG processing
-          const { error: docError } = await supabase.from('documents').insert({
+          // Also store in documents table for RAG processing using upsert
+          const { error: docError } = await supabase.from('documents').upsert({
             name: `Web Content: ${new URL(link).hostname}`,
             document_link: link,
             created_by: user?.id,
             domain: cloneDomain,
             included_in_default: false,
             client_name: formData.name // Use clone name as client name
+          }, {
+            onConflict: 'name',
+            ignoreDuplicates: false
           })
 
           if (docError) {
@@ -768,22 +926,55 @@ INSTRUCTIONS:
 
       console.log('Sending RAG processing request:', ragRequest)
 
-      // Wait a moment to ensure database transaction is committed
-      console.log('Waiting 2 seconds for database consistency...')
-      await new Promise(resolve => setTimeout(resolve, 2000))
+      // Wait for database consistency and retry with exponential backoff
+      let response;
+      let attempt = 0;
+      const maxAttempts = 3;
+      
+      while (attempt < maxAttempts) {
+        attempt++;
+        const waitTime = Math.min(2000 * Math.pow(2, attempt - 1), 10000); // 2s, 4s, 8s max
+        
+        console.log(`Attempt ${attempt}/${maxAttempts}: Waiting ${waitTime}ms for database consistency...`)
+        await new Promise(resolve => setTimeout(resolve, waitTime))
 
-      // Call RAG processing endpoint
-      const response = await fetch(`/api/clones/${cloneId}/process-knowledge`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getAuthTokens().accessToken}`,
-        },
-        body: JSON.stringify(ragRequest),
-      })
+        // Get current Supabase session for authentication
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+        
+        if (sessionError || !session) {
+          console.error('Failed to get Supabase session:', sessionError)
+          throw new Error('Authentication session expired. Please refresh the page and try again.')
+        }
 
-      console.log('RAG processing response status:', response.status, response.statusText)
-      console.log('RAG processing response headers:', Object.fromEntries(response.headers.entries()))
+        console.log('Using Supabase access token for RAG processing')
+
+        // Call RAG processing endpoint with Supabase session token
+        response = await fetch(`/api/clones/${cloneId}/process-knowledge`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify(ragRequest),
+        })
+
+        console.log(`Attempt ${attempt}: RAG processing response status:`, response.status, response.statusText)
+        
+        if (response.ok) {
+          break; // Success, exit retry loop
+        }
+        
+        // If it's a 404 (Clone not found) and we have more attempts, retry
+        if (response.status === 404 && attempt < maxAttempts) {
+          console.log(`Clone not found on attempt ${attempt}, retrying...`)
+          continue;
+        }
+        
+        // For other errors or if we've exhausted attempts, break and handle the error
+        break;
+      }
+
+      console.log('Final RAG processing response headers:', Object.fromEntries(response.headers.entries()))
       
       if (!response.ok) {
         let errorData;
@@ -792,12 +983,41 @@ INSTRUCTIONS:
         
         try {
           errorData = JSON.parse(responseText)
+          
+          // Enhanced error handling with user-friendly messages
+          console.log('Parsed error data:', {
+            error_type: errorData.error_type,
+            retryable: errorData.retryable,
+            attempts_made: errorData.attempts_made
+          })
+          
+          // Handle specific error types with appropriate user feedback
+          if (errorData.error_type === 'validation') {
+            throw new Error(`Setup Issue: ${errorData.error}. Please refresh the page and try again.`)
+          } else if (errorData.error_type === 'timeout') {
+            throw new Error(`Processing Timeout: ${errorData.error}. You can check processing status later or retry.`)
+          } else if (errorData.error_type === 'connection') {
+            throw new Error(`Service Unavailable: ${errorData.error}. Please check your connection and try again.`)
+          } else if (errorData.error_type === 'auth') {
+            throw new Error(`Authentication Error: ${errorData.error}. Please refresh the page and log in again.`)
+          } else {
+            // Generic processing error with retryable info
+            const retryMsg = errorData.retryable ? ' You can try processing again.' : ' Please contact support if this persists.'
+            throw new Error(`Processing Error: ${errorData.error}${retryMsg}`)
+          }
         } catch (parseError) {
           console.error('Failed to parse error response as JSON:', parseError)
-          throw new Error(`RAG processing failed with ${response.status}: ${responseText.substring(0, 200)}${responseText.length > 200 ? '...' : ''}`)
+          // Fallback error based on status code
+          if (response.status >= 500) {
+            throw new Error(`Service Temporarily Unavailable (${response.status}). Please try again in a few minutes.`)
+          } else if (response.status === 401) {
+            throw new Error('Authentication expired. Please refresh the page and log in again.')
+          } else if (response.status === 404) {
+            throw new Error('Clone not found. This might be a timing issue - please try again.')
+          } else {
+            throw new Error(`Processing failed (${response.status}). Please try again or contact support.`)
+          }
         }
-        
-        throw new Error(errorData.detail || errorData.error || `RAG processing failed: ${response.status}`)
       }
 
       let result;
@@ -812,19 +1032,37 @@ INSTRUCTIONS:
         throw new Error(`Server returned invalid JSON: ${responseText.substring(0, 200)}${responseText.length > 200 ? '...' : ''}`)
       }
 
+      // Enhanced success handling with more detailed feedback
       if (result.overall_status === 'completed') {
         setKnowledgeProcessingStatus('completed')
         toast({
-          title: "Knowledge Processing Complete",
-          description: "Your documents have been successfully processed and integrated into your clone.",
+          title: "🎉 Knowledge Processing Complete!",
+          description: result.message || `Successfully processed ${result.processed_count} documents. Your clone is ready for advanced conversations!`,
         })
+        console.log(`RAG processing completed: ${result.processed_count} documents processed`)
       } else if (result.overall_status === 'failed') {
-        throw new Error(result.error_message || 'Knowledge processing failed')
-      } else {
+        setKnowledgeProcessingStatus('failed')
+        toast({
+          title: "Knowledge Processing Failed",
+          description: result.message || "Documents couldn't be processed. Your clone will use basic conversation mode.",
+          variant: "destructive",
+        })
+        if (result.processing_errors && result.processing_errors.length > 0) {
+          console.log('Processing errors:', result.processing_errors)
+        }
+      } else if (result.overall_status === 'partial') {
         setKnowledgeProcessingStatus('partial')
         toast({
-          title: "Partial Processing Complete",
-          description: "Some documents were processed successfully. Check the status for details.",
+          title: "⚠️ Partial Processing Complete",
+          description: result.message || `Processed ${result.processed_count} of ${result.total_entries} documents. Some failed but your clone has enhanced capabilities.`,
+          variant: "destructive",
+        })
+        console.log(`Partial success: ${result.processed_count}/${result.total_entries} processed`)
+      } else if (result.overall_status === 'timeout') {
+        setKnowledgeProcessingStatus('partial')
+        toast({
+          title: "⏱️ Processing Taking Longer",
+          description: result.message || "Processing is taking longer than expected. You can check status later or continue with setup.",
           variant: "destructive",
         })
       }
@@ -832,15 +1070,43 @@ INSTRUCTIONS:
     } catch (error) {
       console.error('RAG processing error:', error)
       setKnowledgeProcessingStatus('failed')
+      
+      const errorMessage = error instanceof Error ? error.message : 'Unknown processing error'
       setProcessingProgress(prev => ({ 
         ...prev, 
-        errors: [...prev.errors, error instanceof Error ? error.message : 'Unknown error']
+        errors: [...prev.errors, errorMessage]
       }))
       
+      // Enhanced error messaging with user-friendly guidance
+      let toastTitle = "Knowledge Processing Failed"
+      let toastDescription = "Your clone will use basic conversation mode."
+      
+      if (errorMessage.includes('Timeout')) {
+        toastTitle = "⏱️ Processing Timeout"
+        toastDescription = "Processing is taking longer than expected. You can retry later or continue with basic mode."
+      } else if (errorMessage.includes('Authentication')) {
+        toastTitle = "🔐 Authentication Issue"
+        toastDescription = "Please refresh the page and log in again to retry processing."
+      } else if (errorMessage.includes('Service Unavailable')) {
+        toastTitle = "🔧 Service Temporarily Down"
+        toastDescription = "Processing service is temporarily unavailable. Please try again in a few minutes."
+      } else if (errorMessage.includes('Connection') || errorMessage.includes('Network')) {
+        toastTitle = "🌐 Connection Issue"
+        toastDescription = "Please check your internet connection and try again."
+      }
+      
       toast({
-        title: "Knowledge Processing Failed",
-        description: error instanceof Error ? error.message : "Failed to process knowledge documents",
+        title: toastTitle,
+        description: toastDescription,
         variant: "destructive",
+        action: errorMessage.includes('retry') || errorMessage.includes('retryable') ? {
+          altText: "Retry Processing",
+          label: "Retry",
+          onClick: () => {
+            console.log('User requested retry from toast')
+            processKnowledgeWithRAG(cloneId)
+          }
+        } : undefined
       })
     } finally {
       setIsProcessingKnowledge(false)
@@ -1020,6 +1286,18 @@ INSTRUCTIONS:
   // Upload file to Supabase Storage
   const uploadFile = async (file: File, bucket: string, folder: string): Promise<string | null> => {
     try {
+      // Ensure user is authenticated before upload
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+      if (sessionError) {
+        console.error('Session error:', sessionError)
+        toast({
+          title: "Authentication Error",
+          description: "Please login again to upload files.",
+          variant: "destructive"
+        })
+        return null
+      }
+
       // Check if storage buckets exist, create them if needed
       const { allExist } = await checkStorageBuckets()
       if (!allExist) {
@@ -1039,16 +1317,35 @@ INSTRUCTIONS:
       const fileExt = file.name.split('.').pop()
       const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`
       // Include user ID in path for RLS policy compatibility
-      const userId = user?.id || 'anonymous'
+      const userId = user?.id || session?.user?.id || 'anonymous'
       const filePath = `${userId}/${folder}/${fileName}`
 
+      // Debug: Log authentication and upload details
+      console.log('Upload attempt details:', {
+        bucket,
+        filePath,
+        userId,
+        hasSession: !!session,
+        hasUser: !!user,
+        sessionUserId: session?.user?.id,
+        contextUserId: user?.id,
+        fileSize: file.size,
+        fileType: file.type
+      })
+
       // Upload with upsert to handle overwriting
-      const { error } = await supabase.storage
+      const { data, error } = await supabase.storage
         .from(bucket)
         .upload(filePath, file, { upsert: true })
 
       if (error) {
-        console.error('Upload error:', error)
+        console.error('Upload error details:', {
+          error: error.message,
+          errorCode: error.statusCode,
+          bucket,
+          filePath,
+          hasAuth: !!session?.user?.id
+        })
         
         // If bucket still doesn't exist, try to create it once more
         if (error.message.includes('Bucket not found')) {
@@ -1056,7 +1353,7 @@ INSTRUCTIONS:
           await setupStorageBuckets()
           
           // Retry the upload
-          const { error: retryError } = await supabase.storage
+          const { data: retryData, error: retryError } = await supabase.storage
             .from(bucket)
             .upload(filePath, file, { upsert: true })
           
@@ -1070,14 +1367,14 @@ INSTRUCTIONS:
       }
 
       // Get public URL - this should work for public buckets
-      const { data } = supabase.storage
+      const { data: urlData } = supabase.storage
         .from(bucket)
         .getPublicUrl(filePath)
 
       console.log('Uploaded file to path:', filePath)
-      console.log('Generated public URL:', data.publicUrl)
+      console.log('Generated public URL:', urlData.publicUrl)
       
-      return data.publicUrl
+      return urlData.publicUrl
     } catch (error) {
       console.error('Upload error:', error)
       return null
@@ -1117,6 +1414,13 @@ INSTRUCTIONS:
   }
 
   const handleNext = async () => {
+    console.log('▶️ DEBUG: handleNext called:', {
+      currentStep,
+      documentsInFormData: formData.documents.length,
+      linksInFormData: formData.links.length,
+      documents: formData.documents.map(doc => ({ name: doc.name, size: doc.size }))
+    })
+
     // Validate current step before proceeding
     const validation = validateStep(currentStep)
     
@@ -1130,8 +1434,19 @@ INSTRUCTIONS:
     }
     
     if (currentStep < steps.length) {
+      console.log('💾 DEBUG: Before saveProgress:', {
+        documentsCount: formData.documents.length,
+        documents: formData.documents.map(doc => ({ name: doc.name, size: doc.size }))
+      })
+
       // Save progress before moving to next step
       const currentCloneId = await saveProgress()
+      
+      console.log('💾 DEBUG: After saveProgress:', {
+        documentsCount: formData.documents.length,
+        documents: formData.documents.map(doc => ({ name: doc.name, size: doc.size })),
+        currentCloneId
+      })
       
       // Ensure clone was created before processing knowledge
       if (!currentCloneId) {
@@ -1145,27 +1460,60 @@ INSTRUCTIONS:
       }
       
       // Special handling for Step 3 (Knowledge Transfer) - trigger RAG processing
+      console.log('🎯 DEBUG: Checking if should trigger RAG processing:', {
+        currentStep,
+        documentsLength: formData.documents.length,
+        linksLength: formData.links.length,
+        documents: formData.documents.map(doc => ({ name: doc.name, size: doc.size })),
+        links: formData.links,
+        shouldTrigger: currentStep === 3 && (formData.documents.length > 0 || formData.links.length > 0)
+      })
+      
       if (currentStep === 3 && (formData.documents.length > 0 || formData.links.length > 0)) {
         try {
-          // Verify clone exists before processing knowledge
-          console.log('Verifying clone exists before RAG processing...')
-          const { data: cloneExists, error: cloneCheckError } = await supabase
-            .from('clones')
-            .select('id, name')
-            .eq('id', currentCloneId)
-            .single()
+          // Give extra time for database consistency after clone creation/update
+          console.log('Waiting extra time for database consistency after saveProgress...')
+          await new Promise(resolve => setTimeout(resolve, 3000))
+
+          // Retry-based verification with exponential backoff
+          let cloneExists = null;
+          let cloneCheckError = null;
+          let verifyAttempts = 0;
+          const maxVerifyAttempts = 5;
+          
+          while (verifyAttempts < maxVerifyAttempts && !cloneExists) {
+            verifyAttempts++;
+            const waitTime = 1000 * verifyAttempts; // 1s, 2s, 3s, 4s, 5s
+            
+            console.log(`Clone verification attempt ${verifyAttempts}/${maxVerifyAttempts} (after ${waitTime}ms wait)...`)
+            
+            if (verifyAttempts > 1) {
+              await new Promise(resolve => setTimeout(resolve, waitTime))
+            }
+            
+            const result = await supabase
+              .from('clones')
+              .select('id, name, creator_id')
+              .eq('id', currentCloneId)
+              .single()
+              
+            cloneExists = result.data
+            cloneCheckError = result.error
+            
+            console.log(`Verification attempt ${verifyAttempts}:`, { found: !!cloneExists, error: cloneCheckError?.message })
+          }
           
           if (cloneCheckError || !cloneExists) {
-            console.error('Clone verification failed:', cloneCheckError)
+            console.error('Clone verification failed after all attempts:', cloneCheckError)
             toast({
               title: "Clone verification failed",
-              description: "Please try saving the clone again before processing knowledge.",
+              description: `Please try saving the clone again. Attempts: ${verifyAttempts}`,
               variant: "destructive"
             })
             return
           }
           
-          console.log('Clone verified, proceeding with RAG processing:', cloneExists)
+          console.log('Clone verified successfully after attempts:', verifyAttempts, cloneExists)
           
           // Process knowledge in background - don't block navigation
           processKnowledgeWithRAG(currentCloneId).catch(error => {
@@ -1460,19 +1808,59 @@ INSTRUCTIONS:
     })
   }
 
-  const handleTestMessage = async () => {
-    if (!testInput.trim()) return
+  // Audio recording functions
+  const startAudioRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const recorder = new MediaRecorder(stream)
+      const audioChunks: BlobPart[] = []
 
+      recorder.ondataavailable = (event) => {
+        audioChunks.push(event.data)
+      }
+
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' })
+        await processAudioMessage(audioBlob)
+        stream.getTracks().forEach(track => track.stop())
+      }
+
+      recorder.start()
+      setMediaRecorder(recorder)
+      setIsRecording(true)
+    } catch (error) {
+      console.error('Error starting audio recording:', error)
+      alert('Could not access microphone. Please check permissions.')
+    }
+  }
+
+  const stopAudioRecording = () => {
+    if (mediaRecorder && isRecording) {
+      mediaRecorder.stop()
+      setIsRecording(false)
+      setMediaRecorder(null)
+    }
+  }
+
+  const processAudioMessage = async (audioBlob: Blob) => {
+    // For now, we'll simulate speech-to-text conversion
+    // In a real implementation, you'd send the audio to a speech-to-text service
+    const transcriptText = "Audio message received - processing..."
+    
     const userMessage = {
       id: Date.now().toString(),
-      content: testInput,
+      content: `🎤 ${transcriptText}`,
       sender: "user" as "user" | "clone",
       timestamp: new Date(),
     }
 
     setTestMessages(prev => [...prev, userMessage])
-    setTestInput("")
+    
+    // Process the transcribed text through the same AI flow
+    await processTextMessage(transcriptText)
+  }
 
+  const processTextMessage = async (text: string) => {
     // Show typing indicator
     const typingMessage = {
       id: "typing",
@@ -1485,7 +1873,7 @@ INSTRUCTIONS:
 
     try {
       // Get AI response using OpenAI
-      const aiResponse = await testCloneWithAI(userMessage.content)
+      const aiResponse = await testCloneWithAI(text)
       
       // Remove typing indicator and add real response
       setTestMessages(prev => {
@@ -1513,6 +1901,22 @@ INSTRUCTIONS:
         return [...withoutTyping, errorMessage]
       })
     }
+  }
+
+  const handleTestMessage = async () => {
+    if (!testInput.trim()) return
+
+    const userMessage = {
+      id: Date.now().toString(),
+      content: testInput,
+      sender: "user" as "user" | "clone",
+      timestamp: new Date(),
+    }
+
+    setTestMessages(prev => [...prev, userMessage])
+    setTestInput("")
+
+    await processTextMessage(userMessage.content)
   }
 
   const renderStepContent = () => {
@@ -1803,10 +2207,17 @@ INSTRUCTIONS:
                         accept=".pdf,.doc,.docx,.txt,.md,.rtf"
                         onChange={(e) => {
                           const files = Array.from(e.target.files || [])
+                          console.log('📁 DEBUG: Files selected:', {
+                            filesCount: files.length,
+                            files: files.map(f => ({ name: f.name, size: f.size, type: f.type })),
+                            previousDocuments: formData.documents.length,
+                            newTotal: formData.documents.length + files.length
+                          })
                           setFormData({
                             ...formData,
                             documents: [...formData.documents, ...files]
                           })
+                          console.log('📁 DEBUG: FormData updated with documents')
                         }}
                         className="hidden"
                         id="file-upload"
@@ -1896,8 +2307,26 @@ INSTRUCTIONS:
               </TabsContent>
             </Tabs>
 
-            {/* RAG Processing Status */}
+            {/* Enhanced RAG Processing Status */}
             {(formData.documents.length > 0 || formData.links.length > 0) && (
+              <div className="mt-6">
+                <EnhancedProcessingMonitor
+                  cloneId={createdCloneId || undefined}
+                  status={knowledgeProcessingStatus as 'pending' | 'processing' | 'completed' | 'failed' | 'partial'}
+                  processedCount={processingProgress.completed}
+                  totalCount={processingProgress.total || (formData.documents.length + formData.links.length)}
+                  failedCount={processingProgress.errors.length}
+                  errors={processingProgress.errors}
+                  onRetry={createdCloneId ? () => retryKnowledgeProcessing(createdCloneId) : undefined}
+                  showHealthCheck={knowledgeProcessingStatus === 'failed'}
+                  isRetrying={isProcessingKnowledge && retryCount > 0}
+                  retryCount={retryCount}
+                />
+              </div>
+            )}
+
+            {/* Legacy RAG Processing Status - Hidden */}
+            {false && (formData.documents.length > 0 || formData.links.length > 0) && (
               <Card className="mt-6">
                 <CardHeader>
                   <CardTitle className="flex items-center space-x-2">
@@ -1936,20 +2365,46 @@ INSTRUCTIONS:
                         </>
                       )}
                       {knowledgeProcessingStatus === 'failed' && (
-                        <>
-                          <div className="h-2 w-2 bg-red-500 rounded-full"></div>
-                          <span className="text-sm text-red-600 dark:text-red-300">
-                            Processing failed. You can continue and retry later.
-                          </span>
-                        </>
+                        <div className="flex items-center justify-between w-full">
+                          <div className="flex items-center space-x-2">
+                            <div className="h-2 w-2 bg-red-500 rounded-full"></div>
+                            <span className="text-sm text-red-600 dark:text-red-300">
+                              Processing failed. You can retry now or continue.
+                            </span>
+                          </div>
+                          {createdCloneId && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => retryKnowledgeProcessing(createdCloneId)}
+                              disabled={isProcessingKnowledge}
+                              className="ml-2 flex-shrink-0"
+                            >
+                              {isProcessingKnowledge ? 'Retrying...' : 'Retry'}
+                            </Button>
+                          )}
+                        </div>
                       )}
                       {knowledgeProcessingStatus === 'partial' && (
-                        <>
-                          <div className="h-2 w-2 bg-yellow-500 rounded-full"></div>
-                          <span className="text-sm text-yellow-600 dark:text-yellow-300">
-                            Some documents processed successfully.
-                          </span>
-                        </>
+                        <div className="flex items-center justify-between w-full">
+                          <div className="flex items-center space-x-2">
+                            <div className="h-2 w-2 bg-yellow-500 rounded-full"></div>
+                            <span className="text-sm text-yellow-600 dark:text-yellow-300">
+                              Some documents processed successfully.
+                            </span>
+                          </div>
+                          {createdCloneId && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => retryKnowledgeProcessing(createdCloneId)}
+                              disabled={isProcessingKnowledge}
+                              className="ml-2 flex-shrink-0"
+                            >
+                              {isProcessingKnowledge ? 'Retrying...' : 'Retry Failed'}
+                            </Button>
+                          )}
+                        </div>
                       )}
                     </div>
 
@@ -2353,22 +2808,101 @@ INSTRUCTIONS:
                       </div>
                     </div>
                     
-                    {/* Input Area */}
-                    <div className="flex space-x-2">
-                      <Input
-                        value={testInput}
-                        onChange={(e) => setTestInput(e.target.value)}
-                        placeholder={`Ask ${formData.name || 'your clone'} anything about ${formData.expertise || 'their expertise'}...`}
-                        onKeyPress={(e) => e.key === "Enter" && !e.shiftKey && handleTestMessage()}
-                        className="flex-1"
-                      />
-                      <Button 
-                        onClick={handleTestMessage}
-                        disabled={!testInput.trim()}
-                      >
-                        Send
-                      </Button>
+                    {/* Testing Mode Selection */}
+                    <div className="border-t border-slate-200 dark:border-slate-700 pt-4">
+                      <div className="flex space-x-2 mb-4">
+                        <Button
+                          size="sm"
+                          variant={testingMode === 'text' ? 'default' : 'outline'}
+                          onClick={() => setTestingMode('text')}
+                        >
+                          💬 Text
+                        </Button>
+                        {formData.enableAudio && (
+                          <Button
+                            size="sm"
+                            variant={testingMode === 'audio' ? 'default' : 'outline'}
+                            onClick={() => setTestingMode('audio')}
+                          >
+                            <Mic className="h-4 w-4 mr-1" />
+                            Audio
+                          </Button>
+                        )}
+                        {formData.enableVideo && (
+                          <Button
+                            size="sm"
+                            variant={testingMode === 'video' ? 'default' : 'outline'}
+                            onClick={() => setTestingMode('video')}
+                          >
+                            <Video className="h-4 w-4 mr-1" />
+                            Video
+                          </Button>
+                        )}
+                      </div>
                     </div>
+                    
+                    {/* Input Area */}
+                    {testingMode === 'text' && (
+                      <div className="flex space-x-2">
+                        <Input
+                          value={testInput}
+                          onChange={(e) => setTestInput(e.target.value)}
+                          placeholder={`Ask ${formData.name || 'your clone'} anything about ${formData.expertise || 'their expertise'}...`}
+                          onKeyPress={(e) => e.key === "Enter" && !e.shiftKey && handleTestMessage()}
+                          className="flex-1"
+                        />
+                        <Button 
+                          onClick={handleTestMessage}
+                          disabled={!testInput.trim()}
+                        >
+                          Send
+                        </Button>
+                      </div>
+                    )}
+                    
+                    {testingMode === 'audio' && (
+                      <div className="flex space-x-2 items-center">
+                        <div className="flex-1 text-center py-4 bg-slate-50 dark:bg-slate-800 rounded-lg border-2 border-dashed border-slate-300 dark:border-slate-600">
+                          <p className="text-sm text-slate-600 dark:text-slate-300 mb-3">
+                            {isRecording ? "🎙️ Recording... Click stop when done" : "🎤 Click to start voice recording"}
+                          </p>
+                        </div>
+                        <Button 
+                          onClick={isRecording ? stopAudioRecording : startAudioRecording}
+                          variant={isRecording ? 'destructive' : 'default'}
+                        >
+                          <Mic className="h-4 w-4 mr-1" />
+                          {isRecording ? 'Stop' : 'Record'}
+                        </Button>
+                      </div>
+                    )}
+                    
+                    {testingMode === 'video' && (
+                      <div className="space-y-4">
+                        <div className="aspect-video bg-slate-100 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 flex items-center justify-center">
+                          <div className="text-center">
+                            <Video className="h-12 w-12 mx-auto text-slate-400 mb-2" />
+                            <p className="text-sm text-slate-600 dark:text-slate-300">Video testing interface</p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">Your avatar will appear here during video calls</p>
+                          </div>
+                        </div>
+                        <div className="flex space-x-2">
+                          <Input
+                            value={testInput}
+                            onChange={(e) => setTestInput(e.target.value)}
+                            placeholder={`Ask ${formData.name || 'your clone'} anything about ${formData.expertise || 'their expertise'}...`}
+                            onKeyPress={(e) => e.key === "Enter" && !e.shiftKey && handleTestMessage()}
+                            className="flex-1"
+                          />
+                          <Button 
+                            onClick={handleTestMessage}
+                            disabled={!testInput.trim()}
+                          >
+                            Send
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                     
                     {/* Testing Info */}
                     <div className="text-xs text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 p-3 rounded-lg">
@@ -2386,7 +2920,37 @@ INSTRUCTIONS:
                           <span>⏳ <strong>Processing:</strong> Knowledge integration in progress</span>
                         )}
                         {knowledgeProcessingStatus === 'failed' && (
-                          <span>⚠️ <strong>Warning:</strong> Knowledge processing failed, using basic mode</span>
+                          <div className="flex items-center justify-between w-full">
+                            <div className="flex flex-col">
+                              <span>⚠️ <strong>Warning:</strong> RAG memory unavailable, using basic LLM mode</span>
+                              {retryCount > 0 && (
+                                <span className="text-xs text-gray-500 mt-1">
+                                  Retry attempts: {retryCount}
+                                </span>
+                              )}
+                            </div>
+                            {createdCloneId && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => retryKnowledgeProcessing(createdCloneId)}
+                                disabled={isProcessingKnowledge}
+                                className="ml-4 flex-shrink-0"
+                              >
+                                {isProcessingKnowledge ? (
+                                  <>
+                                    <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                                    Retrying...
+                                  </>
+                                ) : (
+                                  <>
+                                    <RefreshCw className="h-3 w-3 mr-1" />
+                                    {retryCount > 0 ? 'Try Again' : 'Retry'}
+                                  </>
+                                )}
+                              </Button>
+                            )}
+                          </div>
                         )}
                       </div>
                     </div>
@@ -2720,7 +3284,7 @@ INSTRUCTIONS:
                         <Button 
                           variant="outline" 
                           size="sm"
-                          onClick={() => processKnowledgeWithRAG(createdCloneId)}
+                          onClick={() => retryKnowledgeProcessing(createdCloneId)}
                           disabled={isProcessingKnowledge}
                         >
                           {isProcessingKnowledge ? 'Retrying...' : 'Retry Processing'}
