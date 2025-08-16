@@ -1392,23 +1392,43 @@ async def retry_failed_processing(
         
         # Check if there are failed documents to retry
         current_status = clone_data.get("document_processing_status")
-        if current_status not in ["failed", "partial"]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No failed processing to retry"
-            )
+        logger.info("Retry processing requested", 
+                   clone_id=clone_id, 
+                   current_status=current_status)
         
-        # Reset processing status to pending
+        # Allow retry for failed, partial, or even completed/pending states
+        # This provides more flexibility for users experiencing issues
+        if current_status == "processing":
+            # Already processing, return current status
+            return {
+                "status": "in_progress",
+                "message": "Processing is already in progress. Please wait for completion.",
+                "clone_id": clone_id
+            }
+        
+        # For all other states (failed, partial, completed, pending), allow retry
+        # This ensures users can always attempt to reprocess their documents
+        
+        # Reset processing status to pending for retry
         update_data = {
             "document_processing_status": "pending",
+            "rag_status": "pending",
             "updated_at": datetime.utcnow().isoformat()
         }
         
         service_supabase.table("clones").update(update_data).eq("id", clone_id).execute()
         
-        logger.info("Clone processing retry initiated", clone_id=clone_id)
+        logger.info("Clone processing retry initiated", 
+                   clone_id=clone_id,
+                   previous_status=current_status)
         
-        return {"message": "Processing retry initiated successfully"}
+        return {
+            "status": "success",
+            "message": "Processing retry initiated successfully. Documents will be reprocessed.",
+            "clone_id": clone_id,
+            "previous_status": current_status,
+            "new_status": "pending"
+        }
         
     except HTTPException:
         raise

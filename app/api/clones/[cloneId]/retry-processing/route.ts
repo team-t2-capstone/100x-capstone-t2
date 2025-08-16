@@ -58,10 +58,19 @@ export async function POST(
 
     // Get authorization header and create authenticated client
     const authHeader = request.headers.get('authorization')
+    console.log('Retry processing auth header status:', authHeader ? 'Present' : 'Missing')
     
-    if (!authHeader) {
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.error('Invalid or missing authorization header for retry processing')
       return NextResponse.json(
-        { error: 'Authorization header required' },
+        { 
+          error: 'Valid authorization header required',
+          status: 'failed',
+          message: 'Authentication required for retry processing',
+          clone_id: cloneId,
+          error_type: 'auth',
+          retryable: false
+        },
         { status: 401 }
       )
     }
@@ -82,12 +91,18 @@ export async function POST(
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), retryTimeout)
     
+    console.log('Sending retry request to backend:', {
+      url: `${backendUrl}/api/v1/clones/${cloneId}/retry-processing`,
+      auth_header_present: !!authHeader
+    })
+    
     const retryResponse = await fetch(`${backendUrl}/api/v1/clones/${cloneId}/retry-processing`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': authHeader
       },
+      body: JSON.stringify({}), // Send empty body to ensure proper request format
       signal: controller.signal
     })
     

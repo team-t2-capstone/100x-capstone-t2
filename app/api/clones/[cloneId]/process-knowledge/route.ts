@@ -78,6 +78,24 @@ export async function POST(
 
     // Get authorization header for backend API calls
     const authHeader = request.headers.get('authorization')
+    console.log('Auth header status:', authHeader ? 'Present' : 'Missing')
+    
+    // Validate that we have authentication for backend calls
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.error('No valid authentication header found for RAG processing')
+      return NextResponse.json(
+        {
+          status: 'error',
+          error: 'Authentication required for document processing',
+          type: 'auth',
+          retryable: false,
+          overall_status: 'failed',
+          clone_id: cloneId,
+          message: 'Authentication required for document processing'
+        },
+        { status: 401 }
+      )
+    }
     
     // For RAG processing (administrative operation), use service role to bypass RLS
     // This ensures consistent behavior with the backend service
@@ -255,10 +273,16 @@ export async function POST(
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': authHeader || ''
+              'Authorization': authHeader
             },
             body: JSON.stringify(requestBody),
             signal: controller.signal
+          })
+          
+          console.log('RAG processing request sent:', {
+            url: `${backendUrl}/api/v1/clones/${cloneId}/process-knowledge`,
+            auth_header_present: !!authHeader,
+            response_status: ragProcessResponse.status
           })
           
           clearTimeout(timeoutId)

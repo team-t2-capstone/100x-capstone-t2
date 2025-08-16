@@ -73,6 +73,12 @@ class SupabaseAuthManager:
                 logger.warning("JWT token missing 'sub' field", payload_keys=list(payload.keys()))
                 return None
             
+            # Check audience (aud) field for Supabase tokens
+            aud = payload.get('aud')
+            if aud and aud not in ['authenticated', 'api']:
+                logger.debug("JWT token audience check", aud=aud)
+                # Don't reject based on audience, just log for debugging
+            
             # Check if token is expired (with some tolerance)
             if "exp" in payload:
                 exp_timestamp = payload["exp"]
@@ -87,7 +93,11 @@ class SupabaseAuthManager:
                 elif current_timestamp > exp_timestamp:
                     logger.debug("JWT token near expiry but within tolerance")
             
-            logger.info("JWT token verified successfully", user_id=user_id)
+            logger.info("JWT token verified successfully", 
+                       user_id=user_id, 
+                       aud=payload.get('aud'),
+                       role=payload.get('role'),
+                       email=payload.get('email'))
             return payload
                 
         except Exception as e:
@@ -313,7 +323,7 @@ async def get_current_user_id(
         logger.warning("Authentication failed - no credentials provided")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
+            detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
@@ -341,10 +351,12 @@ async def get_current_user_id(
             logger.debug("Internal JWT verification error", error=str(e))
     
     if payload is None:
-        logger.warning("Authentication failed - both verification methods failed")
+        logger.warning("Authentication failed - both verification methods failed", 
+                      token_length=len(token), 
+                      token_format_valid=(dot_count == 2))
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
@@ -354,8 +366,8 @@ async def get_current_user_id(
                       auth_method=auth_method, 
                       payload_keys=list(payload.keys()) if payload else None)
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
     

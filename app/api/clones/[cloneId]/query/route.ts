@@ -18,25 +18,16 @@ export async function POST(
 
     // Get authorization header and create authenticated client
     const authHeader = request.headers.get('authorization')
-    let supabase = supabaseServer // Default to service role
+    console.log('Query auth header status:', authHeader ? 'Present' : 'Missing')
+    
+    // For clone queries, use service role to ensure access to clone data
+    // The clone access will be validated separately
+    let supabase = supabaseServer
     
     if (authHeader && authHeader.startsWith('Bearer ')) {
-      console.log('Using authenticated client for clone query')
-      
-      // Create authenticated client using the user's token
-      supabase = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        {
-          global: {
-            headers: {
-              Authorization: authHeader
-            }
-          }
-        }
-      )
+      console.log('Using service role client with auth validation for clone query')
     } else {
-      console.log('No auth token provided for clone query, using service role client')
+      console.log('No auth token provided for clone query, using service role client only')
     }
 
     if (!query) {
@@ -89,11 +80,18 @@ export async function POST(
       try {
         // Call backend RAG query system for true vector search
         const backendUrl = process.env.BACKEND_URL || 'http://localhost:8000'
+        
+        console.log('Calling backend RAG query:', {
+          url: `${backendUrl}/api/v1/knowledge/query-clone-expert`,
+          auth_header_present: !!authHeader,
+          clone_id: cloneId
+        })
+        
         const ragQueryResponse = await fetch(`${backendUrl}/api/v1/knowledge/query-clone-expert`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': authHeader || ''
+            ...(authHeader && { 'Authorization': authHeader })
           },
           body: JSON.stringify({
             clone_id: cloneId,
