@@ -10,7 +10,7 @@ export async function setupStorageBuckets() {
   try {
     // Create knowledge-documents bucket
     const { error: knowledgeError } = await supabase.storage.createBucket('knowledge-documents', {
-      public: false,
+      public: true,
       allowedMimeTypes: [
         'application/pdf',
         'application/msword',
@@ -45,6 +45,38 @@ export async function setupStorageBuckets() {
       throw avatarError
     }
     
+    // Create clone-avatars bucket
+    const { error: cloneAvatarError } = await supabase.storage.createBucket('clone-avatars', {
+      public: true,
+      allowedMimeTypes: [
+        'image/jpeg',
+        'image/png',
+        'image/gif',
+        'image/webp'
+      ],
+      fileSizeLimit: 5 * 1024 * 1024 // 5MB
+    })
+    
+    if (cloneAvatarError && !cloneAvatarError.message.includes('already exists')) {
+      throw cloneAvatarError
+    }
+    
+    // Create exports bucket
+    const { error: exportsError } = await supabase.storage.createBucket('exports', {
+      public: false,
+      allowedMimeTypes: [
+        'application/json',
+        'text/csv',
+        'application/pdf',
+        'application/zip'
+      ],
+      fileSizeLimit: 100 * 1024 * 1024 // 100MB
+    })
+    
+    if (exportsError && !exportsError.message.includes('already exists')) {
+      throw exportsError
+    }
+    
     console.log('✅ Storage buckets created successfully')
     
     // Set up RLS policies
@@ -66,7 +98,7 @@ async function setupStoragePolicies() {
   // to manage their own files.
   
   try {
-    // Knowledge documents policy - users can upload/access their own files
+    // Knowledge documents policy - users can upload and publicly read documents
     await supabase.rpc('create_storage_policy', {
       bucket_name: 'knowledge-documents',
       policy_name: 'Users can upload knowledge documents',
@@ -77,6 +109,19 @@ async function setupStoragePolicies() {
     }).catch(() => {
       // Policy might already exist or RPC not available
       console.log('Note: Could not create knowledge documents policy via RPC')
+    })
+
+    // Allow public read access for knowledge documents (needed for RAG processing)
+    await supabase.rpc('create_storage_policy', {
+      bucket_name: 'knowledge-documents',
+      policy_name: 'Public read access for knowledge documents',
+      definition: `
+        CREATE POLICY "Public read access for knowledge documents" ON storage.objects
+        FOR SELECT USING (bucket_id = 'knowledge-documents');
+      `
+    }).catch(() => {
+      // Policy might already exist or RPC not available
+      console.log('Note: Could not create public read policy via RPC')
     })
     
     // Avatar policy - users can upload/access avatar images  
@@ -90,6 +135,32 @@ async function setupStoragePolicies() {
     }).catch(() => {
       // Policy might already exist or RPC not available
       console.log('Note: Could not create avatar policy via RPC')
+    })
+    
+    // Clone avatars policy - users can upload/access clone avatar images  
+    await supabase.rpc('create_storage_policy', {
+      bucket_name: 'clone-avatars',
+      policy_name: 'Users can upload clone avatars',
+      definition: `
+        CREATE POLICY "Users can upload clone avatars" ON storage.objects
+        FOR INSERT WITH CHECK (auth.role() = 'authenticated' AND bucket_id = 'clone-avatars');
+      `
+    }).catch(() => {
+      // Policy might already exist or RPC not available
+      console.log('Note: Could not create clone avatar policy via RPC')
+    })
+    
+    // Exports policy - users can access their own exports
+    await supabase.rpc('create_storage_policy', {
+      bucket_name: 'exports',
+      policy_name: 'Users can access their exports',
+      definition: `
+        CREATE POLICY "Users can access their exports" ON storage.objects
+        FOR ALL USING (auth.role() = 'authenticated' AND bucket_id = 'exports');
+      `
+    }).catch(() => {
+      // Policy might already exist or RPC not available
+      console.log('Note: Could not create exports policy via RPC')
     })
     
     console.log('✅ Storage policies setup completed')
@@ -109,7 +180,7 @@ export async function checkStorageBuckets() {
       throw error
     }
     
-    const requiredBuckets = ['knowledge-documents', 'avatars']
+    const requiredBuckets = ['knowledge-documents', 'avatars', 'clone-avatars', 'exports']
     const existingBuckets = buckets?.map(b => b.name) || []
     const missingBuckets = requiredBuckets.filter(name => !existingBuckets.includes(name))
     
@@ -121,6 +192,6 @@ export async function checkStorageBuckets() {
     
   } catch (error) {
     console.error('Failed to check storage buckets:', error)
-    return { allExist: false, existing: [], missing: ['knowledge-documents', 'avatars'], error }
+    return { allExist: false, existing: [], missing: ['knowledge-documents', 'avatars', 'clone-avatars', 'exports'], error }
   }
 }

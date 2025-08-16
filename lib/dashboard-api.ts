@@ -226,52 +226,55 @@ export class DashboardApi {
     }
   }
 
-  async deleteClone(cloneId: string) {
+  async deleteClone(cloneId: string, options?: { force?: boolean; showProgress?: boolean }) {
     try {
-      const { supabase } = await import('./supabase');
-      
-      // Delete all related data first (cascade delete)
-      // Delete related sessions
-      const { error: sessionsError } = await supabase
-        .from('sessions')
-        .delete()
-        .eq('clone_id', cloneId);
-      
-      if (sessionsError) {
-        console.warn('Error deleting sessions:', sessionsError);
-      }
-      
-      // Delete related knowledge entries
-      const { error: knowledgeError } = await supabase
-        .from('knowledge_entries')
-        .delete()
-        .eq('clone_id', cloneId);
-      
-      if (knowledgeError) {
-        console.warn('Error deleting knowledge entries:', knowledgeError);
-      }
-      
-      // Delete related documents
-      const { error: documentsError } = await supabase
-        .from('documents')
-        .delete()
-        .eq('clone_id', cloneId);
-      
-      if (documentsError) {
-        console.warn('Error deleting documents:', documentsError);
-      }
-      
-      // Finally, delete the clone itself
-      const { error: cloneError } = await supabase
-        .from('clones')
-        .delete()
-        .eq('id', cloneId);
-      
-      if (cloneError) throw cloneError;
-      
-      return { success: true };
+      const response = await apiClient.delete(`/clones/${cloneId}${options?.force ? '/force' : ''}`);
+      return {
+        success: true,
+        message: response.data.message,
+        warnings: response.data.warnings || [],
+        cleanup_details: response.data.cleanup_details,
+        timestamp: response.data.timestamp
+      };
     } catch (error: any) {
-      throw new Error(`Failed to delete clone: ${error.message}`);
+      const apiError = parseApiError(error as AxiosError);
+      throw new Error(`Failed to delete clone: ${apiError.message}`);
+    }
+  }
+
+  async checkCleanupHealth() {
+    try {
+      const response = await apiClient.get('/clones/cleanup/health');
+      return response.data;
+    } catch (error: any) {
+      const apiError = parseApiError(error as AxiosError);
+      throw new Error(`Failed to check cleanup health: ${apiError.message}`);
+    }
+  }
+
+  async getCloneDeletionPreview(cloneId: string) {
+    try {
+      const response = await apiClient.get(`/clones/${cloneId}/deletion-preview`);
+      return response.data;
+    } catch (error: any) {
+      const apiError = parseApiError(error as AxiosError);
+      throw new Error(`Failed to get deletion preview: ${apiError.message}`);
+    }
+  }
+
+  async deleteCloneForce(cloneId: string) {
+    try {
+      const response = await apiClient.delete(`/clones/${cloneId}/force`);
+      return {
+        success: true,
+        message: response.data.message,
+        terminated_sessions: response.data.terminated_sessions || 0,
+        warnings: response.data.warnings || [],
+        timestamp: response.data.timestamp
+      };
+    } catch (error: any) {
+      const apiError = parseApiError(error as AxiosError);
+      throw new Error(`Failed to force delete clone: ${apiError.message}`);
     }
   }
 
@@ -409,3 +412,12 @@ export const getBillingInfo = (userId: string) =>
 
 export const discoverClones = (params?: Parameters<typeof dashboardApi.discoverClones>[0]) => 
   dashboardApi.discoverClones(params);
+
+export const deleteCloneForce = (cloneId: string) => 
+  dashboardApi.deleteCloneForce(cloneId);
+
+export const scanOrphanedData = () => 
+  dashboardApi.scanOrphanedData();
+
+export const verifyCloneCleanup = (cloneId: string) => 
+  dashboardApi.verifyCloneCleanup(cloneId);

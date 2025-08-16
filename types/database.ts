@@ -25,6 +25,10 @@ export interface Database {
           total_sessions: number
           total_earnings: number
           avatar_url?: string
+          rag_assistant_id?: string
+          rag_expert_name?: string
+          rag_domain_name?: string
+          rag_status?: 'pending' | 'processing' | 'completed' | 'failed'
           created_at: string
           updated_at: string
           published_at?: string
@@ -69,6 +73,10 @@ export interface Database {
           total_sessions?: number
           total_earnings?: number
           avatar_url?: string
+          rag_assistant_id?: string
+          rag_expert_name?: string
+          rag_domain_name?: string
+          rag_status?: 'pending' | 'processing' | 'completed' | 'failed'
           created_at?: string
           updated_at?: string
           published_at?: string
@@ -89,6 +97,7 @@ export interface Database {
           content_preview?: string
           tags?: string[]
           vector_store_status: 'pending' | 'processing' | 'completed' | 'failed'
+          embedding_metadata?: Record<string, any>
           created_at: string
           updated_at: string
         }
@@ -106,6 +115,7 @@ export interface Database {
           content_preview?: string
           tags?: string[]
           vector_store_status?: 'pending' | 'processing' | 'completed' | 'failed'
+          embedding_metadata?: Record<string, any>
           created_at?: string
           updated_at?: string
         }
@@ -121,10 +131,13 @@ export interface Database {
           content_preview?: string
           tags?: string[]
           vector_store_status?: 'pending' | 'processing' | 'completed' | 'failed'
+          embedding_metadata?: Record<string, any>
           updated_at?: string
         }
       }
-      documents: {
+      // Legacy tables - can be removed in migration
+      // Keeping for reference during transition
+      documents?: {
         Row: {
           id: string
           name: string
@@ -135,59 +148,47 @@ export interface Database {
           client_name?: string
           openai_file_id?: string
         }
-        Insert: {
-          id?: string
-          name: string
-          document_link: string
-          created_by?: string
-          domain: string
-          included_in_default?: boolean
-          client_name?: string
-          openai_file_id?: string
-        }
-        Update: {
-          name?: string
-          document_link?: string
-          created_by?: string
-          domain?: string
-          included_in_default?: boolean
-          client_name?: string
-          openai_file_id?: string
-        }
       }
-      domains: {
+      domains?: {
         Row: {
           id: string
           domain_name: string
           expert_names: string[]
         }
-        Insert: {
-          id?: string
-          domain_name: string
-          expert_names?: string[]
-        }
-        Update: {
-          domain_name?: string
-          expert_names?: string[]
-        }
       }
-      experts: {
+      experts?: {
         Row: {
           id: string
           name: string
           domain: string
           context: string
         }
-        Insert: {
-          id?: string
-          name: string
-          domain: string
-          context: string
+      }
+      assistants?: {
+        Row: {
+          id: string
+          assistant_id: string
+          expert_name: string
+          memory_type: string
+          client_name?: string
+          vector_id?: string
+          created_at: string
+          updated_at: string
         }
-        Update: {
-          name?: string
-          domain?: string
-          context?: string
+      }
+      vector_stores?: {
+        Row: {
+          id: string
+          vector_id: string
+          domain_name: string
+          expert_name?: string
+          client_name?: string
+          file_ids: string[]
+          batch_ids: string[]
+          latest_batch_id?: string
+          owner: string
+          created_at: string
+          updated_at: string
         }
       }
       // Add other tables as needed
@@ -243,4 +244,59 @@ export interface Database {
       }
     }
   }
+}
+
+// Simplified RAG API Response Types
+export interface RAGProcessingResponse {
+  status: 'success' | 'failed'
+  message: string
+  clone_id?: string
+  assistant_id?: string
+  vector_store_id?: string
+  processed_documents?: number
+  error?: string
+}
+
+export interface RAGQueryResponse {
+  response: { text: string }
+  thread_id?: string
+  assistant_id?: string
+  sources?: string[]
+  confidence?: number
+  clone_id: string
+  query?: string
+  timestamp?: string
+}
+
+export interface RAGError {
+  type: 'configuration' | 'processing' | 'validation' | 'connection' | 'auth'
+  message: string
+  suggestion?: string
+  retryable: boolean
+}
+
+export interface RAGHealthCheckResponse {
+  rag_ready: boolean
+  status: 'healthy' | 'error' | 'unhealthy'
+  message: string
+  openai_api_key_configured: boolean
+  openai_client_initialized: boolean
+  supabase_configured: boolean
+  issues?: string[]
+  solutions?: string[]
+  timestamp: string
+  error?: string
+}
+
+export interface ProcessingStatus {
+  clone_id: string
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'no_documents'
+  completed_documents: number
+  total_documents: number
+  processing_documents: number
+  failed_documents: number
+  progress_percentage: number
+  expert_name?: string
+  assistant_id?: string
+  error_message?: string
 }

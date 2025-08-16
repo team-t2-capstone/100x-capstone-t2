@@ -268,7 +268,7 @@ export default function VideoCallPage({ params }: { params: { id: string } }) {
                           <div className="text-sm text-red-300 mt-2">Error: {error}</div>
                         )}
                       </div>
-                    ) : null}
+                    )}
                   </div>
 
                   {/* Local Video (Picture-in-Picture) */}

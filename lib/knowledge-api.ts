@@ -338,7 +338,7 @@ export class KnowledgeApi {
    * Process knowledge documents for a clone using simplified OpenAI RAG
    */
   async processKnowledge(cloneId: string): Promise<ProcessingResult> {
-    const response = await fetch(`${API_BASE_URL}/api/v1/clones/${cloneId}/process-batch`, {
+    const response = await fetch(`${API_BASE_URL}/api/v1/clones/${cloneId}/process-knowledge`, {
       method: 'POST',
       headers: this.getHeaders(),
     });

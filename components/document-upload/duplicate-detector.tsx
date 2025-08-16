@@ -214,47 +214,47 @@ export function DuplicateDetector({
               <AlertTriangle className="h-5 w-5 text-yellow-500" />
               <span>Document Already Exists</span>
             </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-4">
-              <p className="text-sm">
-                {duplicateResult?.message}
-              </p>
-              
-              {duplicateResult?.existing_document && (
-                <div className="bg-gray-50 p-3 rounded-lg border">
-                  <div className="flex items-start space-x-3">
-                    <FileText className="h-4 w-4 text-gray-500 mt-0.5" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900 truncate">
-                        {duplicateResult.existing_document.filename}
-                      </p>
-                      <div className="flex items-center space-x-2 mt-1">
-                        {getStatusIcon(duplicateResult.existing_document.processing_status)}
-                        <Badge variant="secondary" className={getStatusColor(duplicateResult.existing_document.processing_status)}>
-                          {duplicateResult.existing_document.processing_status}
-                        </Badge>
-                        <Badge variant="outline" className="text-xs">
-                          {getMatchTypeDescription(duplicateResult.existing_document.match_type)}
-                        </Badge>
-                      </div>
-                      <p className="text-xs text-gray-500 mt-1">
-                        Uploaded: {new Date(duplicateResult.existing_document.created_at).toLocaleDateString()}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="bg-blue-50 p-3 rounded-lg border-l-4 border-blue-400">
-                <p className="text-sm text-blue-800">
-                  <strong>What would you like to do?</strong>
-                </p>
-                <ul className="text-xs text-blue-700 mt-1 space-y-1">
-                  <li>• <strong>Replace:</strong> Remove the existing document and upload this one</li>
-                  <li>• <strong>Cancel:</strong> Keep the existing document and don't upload</li>
-                </ul>
-              </div>
+            <AlertDialogDescription>
+              {duplicateResult?.message}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          
+          <div className="space-y-4">
+            {duplicateResult?.existing_document && (
+              <div className="bg-gray-50 p-3 rounded-lg border">
+                <div className="flex items-start space-x-3">
+                  <FileText className="h-4 w-4 text-gray-500 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900 truncate">
+                      {duplicateResult.existing_document.filename}
+                    </p>
+                    <div className="flex items-center space-x-2 mt-1">
+                      {getStatusIcon(duplicateResult.existing_document.processing_status)}
+                      <Badge variant="secondary" className={getStatusColor(duplicateResult.existing_document.processing_status)}>
+                        {duplicateResult.existing_document.processing_status}
+                      </Badge>
+                      <Badge variant="outline" className="text-xs">
+                        {getMatchTypeDescription(duplicateResult.existing_document.match_type)}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Uploaded: {new Date(duplicateResult.existing_document.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="bg-blue-50 p-3 rounded-lg border-l-4 border-blue-400">
+              <p className="text-sm text-blue-800">
+                <strong>What would you like to do?</strong>
+              </p>
+              <div className="text-xs text-blue-700 mt-1 space-y-1">
+                <div>• <strong>Replace:</strong> Remove the existing document and upload this one</div>
+                <div>• <strong>Cancel:</strong> Keep the existing document and don't upload</div>
+              </div>
+            </div>
+          </div>
           <AlertDialogFooter className="space-x-2">
             <AlertDialogCancel 
               onClick={() => {

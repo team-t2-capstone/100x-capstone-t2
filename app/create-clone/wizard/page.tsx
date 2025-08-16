@@ -1415,24 +1415,47 @@ INSTRUCTIONS:
       const documents: Array<{name: string; url: string; status: string; type: string; id: string}> = []
       const links: Array<{name: string; url: string; status: string; type: string; id: string}> = []
       
-      // Separate documents and links
+      // Separate documents and links with robust null-safe mapping
       knowledgeData.forEach(item => {
+        // Ensure we always have a valid name with robust null/undefined checking
+        const safeName = (
+          (item.title && typeof item.title === 'string' ? item.title.trim() : '') ||
+          (item.file_name && typeof item.file_name === 'string' ? item.file_name.trim() : '') ||
+          (item.name && typeof item.name === 'string' ? item.name.trim() : '') ||
+          (item.file_url && typeof item.file_url === 'string' ? `Document-${item.id || Date.now()}` : '') ||
+          (item.original_url && typeof item.original_url === 'string' ? `Link-${item.id || Date.now()}` : '') ||
+          `Item-${item.id || Date.now()}`
+        )
+        
+        // Ensure name is never empty, null, or undefined
+        const finalName = (safeName && typeof safeName === 'string' && safeName.trim()) ? safeName.trim() : `Unknown-${item.id || Date.now()}`
+
         const itemData = {
-          id: item.id,
-          name: item.title || item.file_name || 'Unknown',
+          id: item.id || `knowledge-${Date.now()}`,
+          name: finalName,
           url: item.file_url || item.original_url || '',
-          status: item.vector_store_status,
-          type: item.content_type
+          status: item.vector_store_status || 'pending',
+          type: item.content_type || 'unknown'
         }
         
         if (item.content_type === 'document' && item.file_url) {
           documents.push(itemData)
         } else if (item.content_type === 'link' && item.original_url) {
-          links.push({
-            ...itemData,
-            url: item.original_url,
-            name: item.title || `Web Content: ${new URL(item.original_url).hostname}`
-          })
+          try {
+            const linkName = item.title || `Web Content: ${new URL(item.original_url).hostname}`
+            links.push({
+              ...itemData,
+              url: item.original_url,
+              name: linkName || `Link-${item.id}`
+            })
+          } catch (urlError) {
+            console.warn('Error parsing URL for link name:', { url: item.original_url, error: urlError })
+            links.push({
+              ...itemData,
+              url: item.original_url,
+              name: item.title || `Link-${item.id}`
+            })
+          }
         }
       })
       
@@ -2599,18 +2622,18 @@ INSTRUCTIONS:
                         existingDocuments: [
                           ...(prev.existingDocuments || []),
                           {
-                            id: document.id,
-                            name: document.filename,
-                            url: document.upload_url,
-                            status: document.processing_status,
-                            type: 'document'
+                            id: document.id || `doc-${Date.now()}`,
+                            name: document.filename || document.file_name || document.title || document.name || `Document-${Date.now()}`,
+                            url: document.upload_url || document.file_url || document.url || '',
+                            status: document.processing_status || document.vector_store_status || document.status || 'pending',
+                            type: document.type || 'document'
                           }
                         ]
                       }))
                       
                       toast({
                         title: "Document uploaded",
-                        description: `${document.filename} has been added to your knowledge base`,
+                        description: `${document.filename || document.file_name || document.title || 'Document'} has been added to your knowledge base`,
                       })
                     }}
                     existingDocuments={formData.existingDocuments}
