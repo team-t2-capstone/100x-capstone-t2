@@ -50,8 +50,20 @@ class SimplifiedRAGService:
         
     async def __aenter__(self):
         """Async context manager"""
+        if not self.settings.OPENAI_API_KEY:
+            raise Exception("OpenAI API key not configured. Please set OPENAI_API_KEY environment variable.")
+        
         if not self.client:
-            raise Exception("OpenAI API key not configured")
+            try:
+                self.client = OpenAI(api_key=self.settings.OPENAI_API_KEY)
+                # Test the client with a simple call
+                models = self.client.models.list()
+            except Exception as e:
+                raise Exception(f"Failed to initialize OpenAI client: {str(e)}")
+        
+        if not self.supabase:
+            raise Exception("Supabase client not available. Check database configuration.")
+        
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -330,18 +342,48 @@ async def query_clone(clone_id: str, query: str, thread_id: Optional[str] = None
 
 async def validate_rag_configuration() -> Dict[str, Any]:
     """Validate RAG configuration"""
+    from ..config import settings
+    from ..database import get_service_supabase
+    
+    validation_result = {
+        "valid": False,
+        "openai_configured": False,
+        "supabase_configured": False,
+        "errors": [],
+        "suggestions": []
+    }
+    
+    # Check OpenAI configuration
+    if not settings.OPENAI_API_KEY:
+        validation_result["errors"].append("OPENAI_API_KEY not configured")
+        validation_result["suggestions"].append("Set OPENAI_API_KEY environment variable")
+    else:
+        try:
+            # Test OpenAI client
+            test_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+            models = test_client.models.list()
+            validation_result["openai_configured"] = True
+        except Exception as e:
+            validation_result["errors"].append(f"OpenAI API validation failed: {str(e)}")
+            validation_result["suggestions"].append("Verify OpenAI API key is valid")
+    
+    # Check Supabase configuration
     try:
-        async with SimplifiedRAGService() as service:
-            return {
-                "valid": True,
-                "openai_configured": bool(service.client),
-                "supabase_configured": bool(service.supabase),
-                "errors": [],
-                "suggestions": []
-            }
+        supabase = get_service_supabase()
+        if supabase:
+            # Test with a simple query
+            test_result = supabase.table("clones").select("id").limit(1).execute()
+            validation_result["supabase_configured"] = True
+        else:
+            validation_result["errors"].append("Supabase client not available")
+            validation_result["suggestions"].append("Check Supabase configuration")
     except Exception as e:
-        return {
-            "valid": False,
-            "errors": [str(e)],
-            "suggestions": ["Check OpenAI API key configuration"]
-        }
+        validation_result["errors"].append(f"Supabase connection failed: {str(e)}")
+        validation_result["suggestions"].append("Verify Supabase credentials")
+    
+    validation_result["valid"] = (
+        validation_result["openai_configured"] and 
+        validation_result["supabase_configured"]
+    )
+    
+    return validation_result

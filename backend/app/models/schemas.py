@@ -438,45 +438,16 @@ class CloneListResponse(BaseSchema):
     pagination: PaginationInfo
 
 
-# Document schemas
-class DocumentUpload(BaseSchema):
-    """Document upload metadata"""
-    title: str = Field(..., min_length=1, max_length=200)
-    description: Optional[str] = Field(None, max_length=1000)
-    tags: List[str] = Field(default_factory=list)
+# Document schemas - DocumentUpload is already defined above
 
 
-class DocumentResponse(BaseSchema):
-    """Document response"""
-    id: str
-    title: str
-    description: Optional[str] = None
-    file_name: str
-    file_type: str
-    file_size_bytes: int
-    processing_status: ProcessingStatus
-    chunk_count: int
-    upload_date: datetime
-    tags: List[str]
+# DocumentResponse is already defined above - removing duplicate
 
 
-class KnowledgeEntryCreate(BaseSchema):
-    """Direct knowledge entry creation"""
-    title: str = Field(..., min_length=1, max_length=200)
-    content: str = Field(..., min_length=1, max_length=10000)
-    category: Optional[str] = Field(None, max_length=50)
-    tags: List[str] = Field(default_factory=list)
+# KnowledgeEntryCreate is already defined above - removing duplicate
 
 
-class KnowledgeEntryResponse(BaseSchema):
-    """Knowledge entry response"""
-    id: str
-    title: str
-    content: str
-    category: Optional[str] = None
-    tags: List[str]
-    created_at: datetime
-    updated_at: datetime
+# KnowledgeEntryResponse is already defined above - removing duplicate
 
 
 # Session schemas

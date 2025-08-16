@@ -188,12 +188,19 @@ async def upload_avatar(
         
         # Upload to Supabase Storage
         try:
+            # Ensure clean file_options with only string values
+            file_options = {
+                "content-type": file.content_type or "application/octet-stream"
+            }
+            
+            # Remove any potential boolean values that might be added elsewhere
+            clean_options = {k: v for k, v in file_options.items() 
+                           if isinstance(v, (str, bytes))}
+            
             storage_response = supabase.storage.from_("avatars").upload(
                 unique_filename,
                 file_content,
-                file_options={
-                    "content-type": file.content_type
-                }
+                file_options=clean_options
             )
             
             if hasattr(storage_response, 'error') and storage_response.error:

@@ -215,13 +215,24 @@ async def detailed_health_check() -> Dict[str, Any]:
     
     # Check RAG service (direct integration)
     try:
-        # For direct integration, check if OpenAI API key is configured
-        from app.config import settings
-        openai_configured = bool(settings.OPENAI_API_KEY)
-        health_status["services"]["rag"] = {
-            "status": "healthy" if openai_configured else "configured",
-            "message": "RAG service ready (direct integration)" if openai_configured else "RAG service configured but OpenAI API key needed"
-        }
+        # Import and test RAG configuration
+        from app.services.simplified_openai_rag import validate_rag_configuration
+        rag_validation = await validate_rag_configuration()
+        
+        if rag_validation["valid"]:
+            health_status["services"]["rag"] = {
+                "status": "healthy",
+                "message": "RAG service ready and configured",
+                "openai_configured": rag_validation["openai_configured"],
+                "supabase_configured": rag_validation["supabase_configured"]
+            }
+        else:
+            health_status["services"]["rag"] = {
+                "status": "unhealthy",
+                "message": f"RAG service has configuration issues: {'; '.join(rag_validation['errors'])}",
+                "errors": rag_validation["errors"],
+                "solutions": rag_validation["suggestions"]
+            }
     except Exception as e:
         health_status["services"]["rag"] = {
             "status": "unhealthy",

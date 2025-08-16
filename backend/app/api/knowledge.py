@@ -13,6 +13,7 @@ from fastapi import (
     File, Form, Query, BackgroundTasks, Body, Request
 )
 from pydantic import BaseModel
+from openai import OpenAI
 import structlog
 
 from app.core.supabase_auth import get_current_user_id
@@ -342,12 +343,19 @@ async def upload_document(
         
         # Upload file to Supabase Storage
         try:
+            # Ensure clean file_options with only string values
+            file_options = {
+                "content-type": file.content_type or "application/octet-stream"
+            }
+            
+            # Remove any potential boolean values that might be added elsewhere
+            clean_options = {k: v for k, v in file_options.items() 
+                           if isinstance(v, (str, bytes))}
+            
             storage_response = service_supabase.storage.from_("knowledge-documents").upload(
                 file_path, 
                 file_content,
-                file_options={
-                    "content-type": file.content_type or "application/octet-stream"
-                }
+                file_options=clean_options
             )
             
             if hasattr(storage_response, 'error') and storage_response.error:
@@ -365,8 +373,11 @@ async def upload_document(
         
         # Get public URL for the uploaded file (for RAG processing)
         try:
-            public_url_response = service_supabase.storage.from_("knowledge-documents").get_public_url(file_path)
-            document_url = public_url_response.get("publicUrl") or public_url_response.get("public_url")
+            # get_public_url returns a string directly, not a dictionary
+            document_url = service_supabase.storage.from_("knowledge-documents").get_public_url(file_path)
+            # Handle case where it might return a dict with 'publicUrl' key (older versions)
+            if isinstance(document_url, dict) and 'publicUrl' in document_url:
+                document_url = document_url['publicUrl']
         except Exception as e:
             logger.warning("Could not get public URL for document", error=str(e))
             document_url = f"{settings.SUPABASE_URL}/storage/v1/object/public/knowledge-documents/{file_path}"
@@ -422,6 +433,7 @@ async def upload_document(
             file_type=file_extension[1:],
             file_size_bytes=file_size,
             processing_status="pending",
+            chunk_count=0,  # Initialize with 0, will be updated after processing
             tags=tags,
             doc_metadata=knowledge_entry["metadata"],
             upload_date=datetime.fromisoformat(knowledge_entry["created_at"].replace('Z', '+00:00'))
@@ -507,6 +519,7 @@ async def list_documents(
                 file_type=doc.get("file_type", ""),
                 file_size_bytes=doc.get("file_size_bytes", 0),
                 processing_status=doc.get("vector_store_status", "pending"),
+                chunk_count=doc.get("chunk_count", 0),  # Get chunk_count from database or default to 0
                 tags=doc.get("tags", []),
                 doc_metadata=doc.get("metadata", {}),
                 upload_date=datetime.fromisoformat(doc["created_at"].replace('Z', '+00:00'))
@@ -571,6 +584,7 @@ async def get_document(
             file_type=document.get("file_type", ""),
             file_size_bytes=document.get("file_size_bytes", 0),
             processing_status=document.get("vector_store_status", "pending"),
+            chunk_count=document.get("chunk_count", 0),  # Get chunk_count from database or default to 0
             tags=document.get("tags", []),
             doc_metadata=document.get("metadata", {}),
             upload_date=datetime.fromisoformat(document["created_at"].replace('Z', '+00:00'))
@@ -1231,32 +1245,79 @@ async def rag_health_check() -> Dict[str, Any]:
     try:
         from app.config import settings
         
-        logger.info("Starting simplified OpenAI RAG health check")
+        logger.info("Starting comprehensive RAG health check")
         
-        # Get comprehensive validation status using simplified service
-        validation_result = await validate_rag_configuration()
-        
+        # Initialize health status
         health_status = {
-            "rag_ready": validation_result["valid"],
-            "openai_api_key_configured": validation_result["openai_configured"],
-            "openai_client_initialized": validation_result.get("openai_configured", False),
-            "supabase_configured": validation_result["supabase_configured"],
-            "issues": validation_result["errors"],
-            "solutions": validation_result["suggestions"],
-            "timestamp": datetime.utcnow().isoformat()
+            "rag_ready": False,
+            "openai_api_key_configured": bool(settings.OPENAI_API_KEY),
+            "openai_client_initialized": False,
+            "supabase_configured": False,
+            "issues": [],
+            "solutions": [],
+            "timestamp": datetime.utcnow().isoformat(),
+            "status": "unhealthy",
+            "message": "Checking RAG configuration..."
         }
         
-        # Add detailed validation info
-        health_status["validation_details"] = validation_result
+        # Check OpenAI configuration
+        if not settings.OPENAI_API_KEY:
+            health_status["issues"].append("OPENAI_API_KEY environment variable not configured")
+            health_status["solutions"].append("Set OPENAI_API_KEY in your environment variables")
+        else:
+            try:
+                # Test OpenAI client initialization
+                test_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+                # Test API connectivity with a simple call
+                models = test_client.models.list()
+                health_status["openai_client_initialized"] = True
+                logger.info("OpenAI client test successful")
+            except Exception as e:
+                health_status["issues"].append(f"OpenAI API key validation failed: {str(e)}")
+                health_status["solutions"].append("Verify your OpenAI API key is valid and has sufficient credits")
+        
+        # Check Supabase configuration
+        try:
+            supabase = get_service_supabase()
+            if supabase:
+                # Test database connectivity
+                test_result = supabase.table("clones").select("id").limit(1).execute()
+                health_status["supabase_configured"] = True
+                logger.info("Supabase connection test successful")
+            else:
+                health_status["issues"].append("Supabase client not available")
+                health_status["solutions"].append("Check SUPABASE_URL and SUPABASE_SERVICE_KEY configuration")
+        except Exception as e:
+            health_status["issues"].append(f"Supabase connection failed: {str(e)}")
+            health_status["solutions"].append("Verify Supabase credentials and network connectivity")
+        
+        # Test using simplified RAG service
+        try:
+            validation_result = await validate_rag_configuration()
+            if validation_result.get("valid"):
+                logger.info("Simplified RAG service validation successful")
+            else:
+                health_status["issues"].extend(validation_result.get("errors", []))
+                health_status["solutions"].extend(validation_result.get("suggestions", []))
+        except Exception as e:
+            health_status["issues"].append(f"RAG service validation failed: {str(e)}")
+            health_status["solutions"].append("Check RAG service configuration")
+        
+        # Determine overall health status
+        health_status["rag_ready"] = (
+            health_status["openai_client_initialized"] and 
+            health_status["supabase_configured"] and
+            len(health_status["issues"]) == 0
+        )
         
         if health_status["rag_ready"]:
-            health_status["message"] = "RAG functionality is properly configured and ready to use"
             health_status["status"] = "healthy"
+            health_status["message"] = "RAG functionality is properly configured and ready to use"
         else:
-            health_status["message"] = f"RAG functionality has {len(health_status['issues'])} configuration issues"
             health_status["status"] = "unhealthy"
+            health_status["message"] = f"RAG functionality has {len(health_status['issues'])} configuration issues"
         
-        logger.info("Simplified OpenAI RAG health check completed", 
+        logger.info("RAG health check completed", 
                    rag_ready=health_status["rag_ready"],
                    issues_count=len(health_status["issues"]))
         
@@ -1271,6 +1332,9 @@ async def rag_health_check() -> Dict[str, Any]:
             "message": "Unable to determine RAG configuration status",
             "issues": [f"Health check execution failed: {str(e)}"],
             "solutions": ["Check backend logs for detailed error information"],
+            "openai_api_key_configured": bool(settings.OPENAI_API_KEY) if hasattr(settings, 'OPENAI_API_KEY') else False,
+            "openai_client_initialized": False,
+            "supabase_configured": False,
             "timestamp": datetime.utcnow().isoformat()
         }
 
