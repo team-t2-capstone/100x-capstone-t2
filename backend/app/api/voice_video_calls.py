@@ -22,7 +22,7 @@ from app.models.database import Clone, Session as CallSession, Message, Conversa
 from app.models.schemas import BaseSchema
 from app.services.voice_synthesis import voice_synthesis_service, synthesize_clone_speech
 from app.services.openai_service import openai_service
-from app.services.rag_workflow import rag_workflow
+from app.services.rag_workflow_wrapper import rag_workflow
 
 logger = structlog.get_logger()
 

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useAuth } from '@/contexts/auth-context'
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/utils/supabase/client'
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -42,6 +42,7 @@ export default function BillingPage() {
         setError(null)
 
         // Get user profile for billing summary
+        const supabase = createClient()
         const { data: userProfile, error: userError } = await supabase
           .from('user_profiles')
           .select('total_spent, credits_remaining, subscription_tier')

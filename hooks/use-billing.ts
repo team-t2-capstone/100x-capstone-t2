@@ -4,6 +4,7 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import { useBilling } from './use-dashboard';
+import { createClient } from '@/utils/supabase/client';
 
 export interface PaymentMethod {
   id: string;
@@ -71,7 +72,7 @@ export function useAdvancedBilling(userId: string) {
       setLoading(true);
       setError(null);
       // Fetch billing info from Supabase
-      const { supabase } = await import('@/lib/supabase');
+      const supabase = createClient();
       // Get user profile billing info
       const { data: userProfile, error: userError } = await supabase
         .from('user_profiles')

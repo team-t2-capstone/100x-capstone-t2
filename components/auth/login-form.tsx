@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -27,6 +27,8 @@ export function LoginForm() {
   const [isLoading, setIsLoading] = useState(false);
   const { login, error, clearError } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnTo = searchParams.get('returnTo') || '/dashboard';
 
   const form = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
@@ -43,8 +45,10 @@ export function LoginForm() {
       
       await login(data);
       
-      // Redirect to dashboard on successful login
-      router.push('/dashboard');
+      console.log('Login successful, redirecting to:', returnTo);
+      // Redirect to return URL or dashboard on successful login
+      router.push(returnTo);
+      router.refresh(); // Force a refresh to ensure auth state is updated
     } catch (error) {
       // Error is handled by the auth context
       console.error('Login failed:', error);

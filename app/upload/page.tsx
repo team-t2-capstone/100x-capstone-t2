@@ -13,7 +13,7 @@ import { ProcessingMonitor } from '@/components/processing/processing-monitor'
 import { KnowledgeSearch } from '@/components/search/knowledge-search'
 import { useAuth } from '@/contexts/auth-context'
 import { useEffect } from 'react'
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/utils/supabase/client'
 
 export default function UploadPage() {
   const { user } = useAuth()
@@ -35,6 +35,7 @@ export default function UploadPage() {
       
       try {
         setLoading(true)
+        const supabase = createClient()
         const { data, error } = await supabase
           .from('clones')
           .select(`

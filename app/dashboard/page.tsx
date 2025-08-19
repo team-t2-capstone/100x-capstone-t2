@@ -3,7 +3,7 @@
 import { RequireAuth } from '@/components/auth/protected-route';
 import { useAuth } from '@/contexts/auth-context';
 import { useState, useEffect } from "react"
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/utils/supabase/client'
 import { Loader2, AlertCircle } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -99,6 +99,9 @@ function DashboardPageContent() {
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  
+  // Initialize Supabase client
+  const supabase = createClient()
 
   // Fetch dashboard data
   useEffect(() => {

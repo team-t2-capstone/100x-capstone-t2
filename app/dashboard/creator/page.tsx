@@ -142,9 +142,17 @@ export default function CreatorDashboardPage() {
   
   const handleDeleteClone = async (cloneId: string) => {
     if (window.confirm('Are you sure you want to delete this clone? This action cannot be undone.')) {
-      const success = await deleteClone(cloneId)
-      if (success) {
-        refresh() // Refresh dashboard data
+      try {
+        const success = await deleteClone(cloneId)
+        if (success) {
+          console.log('Clone deleted successfully');
+          refresh() // Refresh dashboard data
+        } else {
+          // Error should be displayed in the cloneActionError state
+          console.error('Clone deletion failed');
+        }
+      } catch (error) {
+        console.error('Unexpected error during clone deletion:', error);
       }
     }
   }
@@ -157,6 +165,21 @@ export default function CreatorDashboardPage() {
         <div className="mb-8">
           <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white mb-2">Creator Dashboard</h1>
           <p className="text-lg text-slate-600 dark:text-slate-300">Manage your AI clones and track performance</p>
+          
+          {/* Clone Action Error Display */}
+          {cloneActionError && (
+            <Alert variant="destructive" className="mt-4">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                <strong>Action Failed:</strong> {cloneActionError}
+                {cloneActionError.includes('authentication') && (
+                  <div className="mt-2">
+                    <p className="text-sm">Try refreshing the page or logging out and back in.</p>
+                  </div>
+                )}
+              </AlertDescription>
+            </Alert>
+          )}
         </div>
 
         <Tabs value={selectedTab} onValueChange={setSelectedTab} className="w-full">

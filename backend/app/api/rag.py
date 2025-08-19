@@ -366,7 +366,7 @@ async def search_knowledge_base(
                    clone_id=getattr(search_request, 'clone_id', 'unknown'))
         
         # Import RAG workflow for direct integration
-        from app.services.rag_workflow import rag_workflow
+        from app.services.rag_workflow_wrapper import rag_workflow
         
         # Use the RAG workflow to search the knowledge base
         rag_response = await rag_workflow.query_clone_expert(

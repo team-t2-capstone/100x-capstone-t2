@@ -2,11 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { supabaseServer } from '@/lib/supabase-server'
 import { RAGQueryResponse } from '@/types/database'
-import OpenAI from 'openai'
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-})
+// Note: OpenAI import removed as it's not used in this route
 
 export async function POST(
   request: NextRequest, 

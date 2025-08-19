@@ -18,7 +18,7 @@ import structlog
 
 from app.models.database import ChatSession, ChatMessage, Clone, UserProfile
 from app.services.openai_service import openai_service
-from app.services.rag_workflow import rag_workflow
+from app.services.rag_workflow_wrapper import rag_workflow
 from app.database import get_db_session
 
 logger = structlog.get_logger()

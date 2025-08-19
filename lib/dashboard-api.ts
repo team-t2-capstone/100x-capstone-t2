@@ -278,6 +278,26 @@ export class DashboardApi {
     }
   }
 
+  async scanOrphanedData() {
+    try {
+      const response = await apiClient.post('/clones/cleanup/orphaned-data');
+      return response.data;
+    } catch (error: any) {
+      const apiError = parseApiError(error as AxiosError);
+      throw new Error(`Failed to scan orphaned data: ${apiError.message}`);
+    }
+  }
+
+  async verifyCloneCleanup(cloneId: string) {
+    try {
+      const response = await apiClient.get(`/clones/${cloneId}/deletion-preview`);
+      return response.data;
+    } catch (error: any) {
+      const apiError = parseApiError(error as AxiosError);
+      throw new Error(`Failed to verify clone cleanup: ${apiError.message}`);
+    }
+  }
+
   // Profile Management Methods
   async getUserProfile(userId: string) {
     try {
@@ -413,6 +433,9 @@ export const getBillingInfo = (userId: string) =>
 export const discoverClones = (params?: Parameters<typeof dashboardApi.discoverClones>[0]) => 
   dashboardApi.discoverClones(params);
 
+export const deleteClone = (cloneId: string, options?: { force?: boolean; showProgress?: boolean }) => 
+  dashboardApi.deleteClone(cloneId, options);
+
 export const deleteCloneForce = (cloneId: string) => 
   dashboardApi.deleteCloneForce(cloneId);
 
@@ -421,3 +444,58 @@ export const scanOrphanedData = () =>
 
 export const verifyCloneCleanup = (cloneId: string) => 
   dashboardApi.verifyCloneCleanup(cloneId);
+
+// Test authentication endpoint
+export const testAuthentication = async () => {
+  try {
+    const response = await apiClient.get('/clones/test-auth');
+    return {
+      success: true,
+      data: response.data,
+    };
+  } catch (error) {
+    const apiError = parseApiError(error as AxiosError);
+    return {
+      success: false,
+      error: apiError.message,
+      status: apiError.status,
+    };
+  }
+};
+
+// Debug authentication helper
+export const debugAuthentication = async () => {
+  try {
+    const { apiClient } = await import('./api-client');
+    const { createClient } = await import('@/utils/supabase/client');
+    const { getAuthTokens } = await import('./api-client');
+    
+    const { accessToken, refreshToken } = getAuthTokens();
+    
+    // Check Supabase session
+    const supabase = createClient();
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    
+    return {
+      cookieTokens: {
+        hasAccessToken: !!accessToken,
+        hasRefreshToken: !!refreshToken,
+        accessTokenLength: accessToken?.length || 0,
+      },
+      supabaseSession: {
+        hasSession: !!session,
+        hasAccessToken: !!session?.access_token,
+        hasRefreshToken: !!session?.refresh_token,
+        userId: session?.user?.id,
+        email: session?.user?.email,
+        sessionError: sessionError?.message,
+      },
+      isAuthenticated: !!(accessToken || session?.access_token),
+    };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      isAuthenticated: false,
+    };
+  }
+};

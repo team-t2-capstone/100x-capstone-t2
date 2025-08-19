@@ -11,6 +11,8 @@ import {
   type CloneData,
   type SessionData
 } from '@/lib/dashboard-api';
+import { createClient } from '@/utils/supabase/client';
+import { storeAuthTokens } from '@/lib/api-client';
 
 // Hook for user dashboard data
 export function useUserDashboard(userId: string, days: number = 30) {
@@ -28,7 +30,7 @@ export function useUserDashboard(userId: string, days: number = 30) {
       setError(null);
       
       // Get user analytics from Supabase
-      const { supabase } = await import('@/lib/supabase');
+      const supabase = createClient();
       
       const [userProfileData, sessionsData, clonesData] = await Promise.allSettled([
         supabase.from('user_profiles').select('*').eq('id', userId).single(),
@@ -123,7 +125,7 @@ export function useCreatorDashboard(creatorId: string, days: number = 30) {
       setError(null);
       
       // Get creator data from Supabase with real analytics
-      const { supabase } = await import('@/lib/supabase');
+      const supabase = createClient();
       
       // First get creator's clones to get their IDs
       const { data: creatorClones } = await supabase
@@ -271,11 +273,30 @@ export function useCloneManagement() {
       setLoading(true);
       setError(null);
       
+      // Ensure authentication tokens are synchronized
+      const supabase = createClient();
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError) {
+        throw new Error(`Authentication error: ${sessionError.message}`);
+      }
+      
+      if (!session?.access_token) {
+        throw new Error('No valid authentication session. Please log in again.');
+      }
+      
+      // Sync tokens with API client
+      if (session.access_token && session.refresh_token) {
+        storeAuthTokens(session.access_token, session.refresh_token);
+      }
+      
       await dashboardApi.updateCloneStatus(cloneId, status);
       return true;
       
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update clone status');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to update clone status';
+      console.error('Clone status update error:', errorMessage);
+      setError(errorMessage);
       return false;
     } finally {
       setLoading(false);
@@ -287,11 +308,31 @@ export function useCloneManagement() {
       setLoading(true);
       setError(null);
       
+      // Ensure authentication tokens are synchronized before deletion
+      const supabase = createClient();
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError) {
+        throw new Error(`Authentication error: ${sessionError.message}`);
+      }
+      
+      if (!session?.access_token) {
+        throw new Error('No valid authentication session. Please log in again.');
+      }
+      
+      // Sync tokens with API client
+      if (session.access_token && session.refresh_token) {
+        storeAuthTokens(session.access_token, session.refresh_token);
+      }
+      
+      // Now attempt the deletion
       await dashboardApi.deleteClone(cloneId);
       return true;
       
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete clone');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to delete clone';
+      console.error('Clone deletion error:', errorMessage);
+      setError(errorMessage);
       return false;
     } finally {
       setLoading(false);
@@ -316,8 +357,8 @@ export function useUserProfile(userId: string) {
   const createUserProfile = useCallback(async (userId: string) => {
     try {
       // Get user data from Supabase auth to populate profile
-      const { supabase, supabaseAuth } = await import('@/lib/supabase');
-      const user = await supabaseAuth.getUser();
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
       
       if (!user) throw new Error('No authenticated user found');
       
@@ -360,18 +401,15 @@ export function useUserProfile(userId: string) {
       setLoading(true);
       setError(null);
       // Fetch profile from Supabase 'user_profiles' table
-      const { data, error } = await import('@/lib/supabase').then(({ supabase }) =>
-        supabase.from('user_profiles').select('*').eq('id', userId).single()
-      );
+      const supabase = createClient();
+      const { data, error } = await supabase.from('user_profiles').select('*').eq('id', userId).single();
       if (error) {
         // If user profile doesn't exist, create one
         if (error.code === 'PGRST116') {
           console.log('User profile not found, creating one...');
           await createUserProfile(userId);
           // Retry fetching after creation
-          const { data: newData, error: newError } = await import('@/lib/supabase').then(({ supabase }) =>
-            supabase.from('user_profiles').select('*').eq('id', userId).single()
-          );
+          const { data: newData, error: newError } = await supabase.from('user_profiles').select('*').eq('id', userId).single();
           if (newError) throw newError;
           setProfile(newData);
         } else {
@@ -396,9 +434,8 @@ export function useUserProfile(userId: string) {
       setUpdating(true);
       setError(null);
       // Update profile in Supabase 'user_profiles' table
-      const { error } = await import('@/lib/supabase').then(({ supabase }) =>
-        supabase.from('user_profiles').update(profileData).eq('id', userId)
-      );
+      const supabase = createClient();
+      const { error } = await supabase.from('user_profiles').update(profileData).eq('id', userId);
       if (error) throw error;
       // Refresh profile after update
       await fetchProfile();
@@ -468,7 +505,7 @@ export function useBilling(userId: string) {
       setError(null);
       
       // Get user profile for billing info
-      const { supabase } = await import('@/lib/supabase');
+      const supabase = createClient();
       const { data: userProfile, error: userError } = await supabase
         .from('user_profiles')
         .select('total_spent, subscription_tier, credits_remaining')
@@ -558,7 +595,7 @@ export function useFavorites(userId: string) {
       setError(null);
       
       // For now, we'll use clones as favorites since we don't have a favorites table
-      const { supabase } = await import('@/lib/supabase');
+      const supabase = createClient();
       const { data, error } = await supabase
         .from('clones')
         .select('*')

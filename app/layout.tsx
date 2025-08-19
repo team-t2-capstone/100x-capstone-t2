@@ -6,6 +6,7 @@ import './globals.css'
 import { AuthProvider } from '@/contexts/auth-context'
 import { Navbar } from '@/components/layout/navbar'
 import { Toaster } from '@/components/ui/toaster'
+import { ErrorBoundary, GlobalErrorHandler } from '@/components/error-boundary'
 
 export const metadata: Metadata = {
   title: 'CloneAI - Create and Chat with AI Clones',
@@ -30,15 +31,19 @@ html {
         `}</style>
       </head>
       <body className={`${GeistSans.variable} ${GeistMono.variable} font-sans`}>
-        <AuthProvider>
-          <div className="flex flex-col min-h-screen">
-            <Navbar />
-            <main className="flex-1">
-              {children}
-            </main>
-          </div>
-          <Toaster />
-        </AuthProvider>
+        <GlobalErrorHandler>
+          <AuthProvider>
+            <ErrorBoundary>
+              <div className="flex flex-col min-h-screen">
+                <Navbar />
+                <main className="flex-1">
+                  {children}
+                </main>
+              </div>
+            </ErrorBoundary>
+            <Toaster />
+          </AuthProvider>
+        </GlobalErrorHandler>
       </body>
     </html>
   )

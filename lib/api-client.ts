@@ -1,9 +1,10 @@
 /**
  * API Client for CloneAI Backend
- * Handles HTTP requests to the FastAPI backend with authentication
+ * Handles HTTP requests to the FastAPI backend with Supabase authentication
  */
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import Cookies from 'js-cookie';
+import { createClient } from '@/utils/supabase/client';
 
 // API Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
@@ -27,8 +28,29 @@ const createApiClient = (): AxiosInstance => {
 
   // Request interceptor to add authentication token
   client.interceptors.request.use(
-    (config) => {
-      const token = Cookies.get(TOKEN_KEYS.ACCESS_TOKEN);
+    async (config) => {
+      // First try to get token from cookies (for backwards compatibility)
+      let token = Cookies.get(TOKEN_KEYS.ACCESS_TOKEN);
+      
+      // If no token in cookies, get from Supabase session
+      if (!token) {
+        try {
+          const supabase = createClient();
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.access_token) {
+            token = session.access_token;
+            // Optionally store in cookie for future requests
+            Cookies.set(TOKEN_KEYS.ACCESS_TOKEN, token, {
+              expires: 1, // 1 day
+              secure: process.env.NODE_ENV === 'production',
+              sameSite: 'strict',
+            });
+          }
+        } catch (error) {
+          console.error('Failed to get Supabase session:', error);
+        }
+      }
+      
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
       }
@@ -45,53 +67,49 @@ const createApiClient = (): AxiosInstance => {
     async (error: AxiosError) => {
       const originalRequest = error.config;
       
-      // Handle 401 Unauthorized - token might be expired
-      if (error.response?.status === 401 && originalRequest) {
-        const refreshToken = Cookies.get(TOKEN_KEYS.REFRESH_TOKEN);
-        
-        if (refreshToken) {
-          try {
-            // Attempt to refresh the token
-            const refreshResponse = await axios.post(`${API_BASE_URL}${API_V1_PREFIX}/auth/refresh`, {
-              refresh_token: refreshToken,
-            });
-
-            const { access_token, refresh_token: newRefreshToken } = refreshResponse.data;
-            
-            // Store new tokens
-            Cookies.set(TOKEN_KEYS.ACCESS_TOKEN, access_token, {
+      // Handle 401/403 Unauthorized - token might be expired or invalid
+      if ((error.response?.status === 401 || error.response?.status === 403) && originalRequest) {
+        try {
+          // Try to refresh using Supabase session
+          const supabase = createClient();
+          const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+          
+          if (!sessionError && session?.access_token) {
+            // Update token in cookies
+            Cookies.set(TOKEN_KEYS.ACCESS_TOKEN, session.access_token, {
               expires: 1, // 1 day
               secure: process.env.NODE_ENV === 'production',
               sameSite: 'strict',
             });
             
-            if (newRefreshToken) {
-              Cookies.set(TOKEN_KEYS.REFRESH_TOKEN, newRefreshToken, {
+            if (session.refresh_token) {
+              Cookies.set(TOKEN_KEYS.REFRESH_TOKEN, session.refresh_token, {
                 expires: 7, // 7 days
                 secure: process.env.NODE_ENV === 'production',
                 sameSite: 'strict',
               });
             }
-
+            
             // Retry the original request with new token
             if (originalRequest.headers) {
-              originalRequest.headers.Authorization = `Bearer ${access_token}`;
+              originalRequest.headers.Authorization = `Bearer ${session.access_token}`;
             }
             return client(originalRequest);
-          } catch (refreshError) {
-            // Refresh failed - redirect to login
+          } else {
+            // No valid session - redirect to login
             clearAuthTokens();
             if (typeof window !== 'undefined') {
               window.location.href = '/auth/login';
             }
-            return Promise.reject(refreshError);
           }
-        } else {
-          // No refresh token - redirect to login
+        } catch (refreshError) {
+          console.error('Token refresh failed:', refreshError);
+          // Refresh failed - redirect to login
           clearAuthTokens();
           if (typeof window !== 'undefined') {
             window.location.href = '/auth/login';
           }
+          return Promise.reject(refreshError);
         }
       }
 
@@ -133,9 +151,22 @@ export const clearAuthTokens = () => {
 };
 
 // Check if user is authenticated
-export const isAuthenticated = (): boolean => {
+export const isAuthenticated = async (): Promise<boolean> => {
+  // First check cookies
   const { accessToken, refreshToken } = getAuthTokens();
-  return !!(accessToken || refreshToken);
+  if (accessToken || refreshToken) {
+    return true;
+  }
+  
+  // Then check Supabase session
+  try {
+    const supabase = createClient();
+    const { data: { session } } = await supabase.auth.getSession();
+    return !!session?.access_token;
+  } catch (error) {
+    console.error('Failed to check Supabase authentication:', error);
+    return false;
+  }
 };
 
 // API Error types
@@ -181,6 +212,57 @@ export const checkApiHealth = async () => {
     return {
       status: 'unhealthy',
       error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+};
+
+// Debug authentication helper
+export const debugAuthentication = async () => {
+  try {
+    const { accessToken, refreshToken } = getAuthTokens();
+    
+    // Check Supabase session
+    const supabase = createClient();
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    
+    return {
+      cookieTokens: {
+        hasAccessToken: !!accessToken,
+        hasRefreshToken: !!refreshToken,
+        accessTokenLength: accessToken?.length || 0,
+      },
+      supabaseSession: {
+        hasSession: !!session,
+        hasAccessToken: !!session?.access_token,
+        hasRefreshToken: !!session?.refresh_token,
+        userId: session?.user?.id,
+        email: session?.user?.email,
+        sessionError: sessionError?.message,
+      },
+      isAuthenticated: !!(accessToken || session?.access_token),
+    };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      isAuthenticated: false,
+    };
+  }
+};
+
+// Test authentication endpoint
+export const testAuthentication = async () => {
+  try {
+    const response = await apiClient.get('/clones/test-auth');
+    return {
+      success: true,
+      data: response.data,
+    };
+  } catch (error) {
+    const apiError = parseApiError(error as AxiosError);
+    return {
+      success: false,
+      error: apiError.message,
+      status: apiError.status,
     };
   }
 };

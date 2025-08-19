@@ -31,10 +31,14 @@ class RAGHealthChecker {
   private readonly CACHE_DURATION = 30000 // 30 seconds
 
   async checkHealth(): Promise<RAGHealthStatus> {
-    // Return cached result if recent
-    if (this.cachedStatus && this.lastCheck && 
-        Date.now() - this.lastCheck.getTime() < this.CACHE_DURATION) {
-      return this.cachedStatus
+    try {
+      // Return cached result if recent
+      if (this.cachedStatus && this.lastCheck && 
+          Date.now() - this.lastCheck.getTime() < this.CACHE_DURATION) {
+        return this.cachedStatus
+      }
+    } catch (cacheError) {
+      console.warn('Cache check failed:', cacheError)
     }
 
     const status: RAGHealthStatus = {
@@ -132,16 +136,26 @@ class RAGHealthChecker {
       // Test processing endpoint availability
       if (cloneId) {
         try {
+          const controller = new AbortController()
+          const timeoutId = setTimeout(() => controller.abort(), 5000) // 5 second timeout
+          
           const testResponse = await fetch(`/api/clones/${cloneId}/process-knowledge`, {
-            method: 'HEAD' // Just check if endpoint exists
+            method: 'HEAD', // Just check if endpoint exists
+            signal: controller.signal
           })
+          
+          clearTimeout(timeoutId)
           
           if (testResponse.status === 405) {
             // Method not allowed is expected for HEAD, means endpoint exists
             diagnostics.processing_status = 'pending'
           }
         } catch (error) {
-          diagnostics.common_errors.push(`Endpoint test failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+          if (error instanceof Error && error.name === 'AbortError') {
+            diagnostics.common_errors.push('Endpoint test timed out')
+          } else {
+            diagnostics.common_errors.push(`Endpoint test failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+          }
         }
       }
 

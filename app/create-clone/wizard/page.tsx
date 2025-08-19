@@ -15,7 +15,7 @@ interface CloneCreateRequest {
   languages: string[];
 }
 // Removed complex knowledge-api - now using direct Supabase operations
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@/utils/supabase/client';
 import { useAuth } from '@/contexts/auth-context';
 import { getAuthTokens } from '@/lib/api-client';
 import { setupStorageBuckets, checkStorageBuckets } from '@/lib/setup-storage';
@@ -218,6 +218,7 @@ function CloneWizardContent() {
     try {
       setIsLoading(true)
       setCreatedCloneId(cloneId)
+      const supabase = createClient()
       
       const { data: clone, error } = await supabase
         .from('clones')
@@ -580,6 +581,7 @@ INSTRUCTIONS:
   // Test clone with OpenAI API or RAG
   const testCloneWithAI = async (userMessage: string) => {
     try {
+      const supabase = createClient()
       // Check if we should use RAG or fallback to basic OpenAI
       if (createdCloneId && knowledgeProcessingStatus === 'completed' && (formData.documents.length > 0 || formData.links.length > 0)) {
         console.log('Using RAG-powered testing for clone:', createdCloneId)
@@ -689,6 +691,7 @@ INSTRUCTIONS:
 
   // Enhanced clone verification with retry logic
   const verifyCloneExists = async (cloneId: string, maxAttempts: number = 5): Promise<boolean> => {
+    const supabase = createClient()
     let verifyAttempts = 0;
     
     while (verifyAttempts < maxAttempts) {
@@ -727,6 +730,7 @@ INSTRUCTIONS:
   const retryKnowledgeProcessing = async (cloneId: string) => {
     if (!cloneId) return
     
+    const supabase = createClient()
     setIsProcessingKnowledge(true)
     setKnowledgeProcessingStatus('processing')
     setRetryCount(prev => prev + 1)
@@ -845,6 +849,7 @@ INSTRUCTIONS:
     }
 
     try {
+      const supabase = createClient()
       setIsProcessingKnowledge(true)
       setKnowledgeProcessingStatus('processing')
       setRetryCount(0) // Reset retry count when starting fresh processing
@@ -1334,6 +1339,7 @@ INSTRUCTIONS:
   // Save Q&A responses to the database
   const saveQAResponses = async (cloneId: string, qaResponses: Record<string, string>) => {
     try {
+      const supabase = createClient()
       console.log('Saving Q&A responses for clone:', cloneId)
       console.log('Q&A data:', qaResponses)
       
@@ -1363,6 +1369,7 @@ INSTRUCTIONS:
   // Load Q&A responses from the database
   const loadQAResponses = async (cloneId: string): Promise<Record<string, string>> => {
     try {
+      const supabase = createClient()
       console.log('Loading Q&A responses for clone:', cloneId)
       
       const { data, error } = await supabase
@@ -1392,6 +1399,7 @@ INSTRUCTIONS:
   // Load existing knowledge documents and links for the clone
   const loadKnowledgeData = async (cloneId: string) => {
     try {
+      const supabase = createClient()
       console.log('Loading knowledge data for clone:', cloneId)
       
       const { data: knowledgeData, error } = await supabase
@@ -1494,6 +1502,7 @@ INSTRUCTIONS:
   // Delete existing knowledge item (document or link)
   const deleteKnowledgeItem = async (itemId: string, itemType: 'document' | 'link') => {
     try {
+      const supabase = createClient()
       console.log(`Deleting ${itemType} with ID:`, itemId)
       
       const { error } = await supabase
@@ -1544,6 +1553,7 @@ INSTRUCTIONS:
   // Helper function to check if required tables exist and create them if missing
   const ensureTablesExist = async () => {
     try {
+      const supabase = createClient()
       console.log('Checking if required database tables exist...')
       
       // Check if documents table exists by attempting a simple query
@@ -1599,6 +1609,7 @@ INSTRUCTIONS:
   // Upload file to Supabase Storage
   const uploadFile = async (file: File, bucket: string, folder: string): Promise<string | null> => {
     try {
+      const supabase = createClient()
       // Ensure user is authenticated before upload
       const { data: { session }, error: sessionError } = await supabase.auth.getSession()
       if (sessionError) {
@@ -1687,7 +1698,14 @@ INSTRUCTIONS:
       console.log('Uploaded file to path:', filePath)
       console.log('Generated public URL:', urlData.publicUrl)
       
-      return urlData.publicUrl
+      // Clean up URL by removing trailing query parameters that might cause issues
+      let cleanUrl = urlData.publicUrl
+      if (cleanUrl.endsWith('?')) {
+        cleanUrl = cleanUrl.slice(0, -1)
+        console.log('Cleaned URL (removed trailing ?):', cleanUrl)
+      }
+      
+      return cleanUrl
     } catch (error) {
       console.error('Upload error:', error)
       return null
@@ -1877,6 +1895,7 @@ INSTRUCTIONS:
 
   const saveProgress = async (): Promise<string | null> => {
     try {
+      const supabase = createClient()
       setIsSubmitting(true)
       
       // Check if we already have a clone ID and if it exists in the database
@@ -2115,6 +2134,7 @@ INSTRUCTIONS:
 
   const handleFinalSubmit = async () => {
     try {
+      const supabase = createClient()
       setIsSubmitting(true)
       
       if (!createdCloneId) {

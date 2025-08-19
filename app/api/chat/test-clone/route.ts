@@ -1,12 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
 import OpenAI from 'openai'
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-})
-
 export async function POST(request: NextRequest) {
   try {
+    // Check for OpenAI API key at runtime
+    const apiKey = process.env.OPENAI_API_KEY
+    console.log('OpenAI API key check:', {
+      hasKey: !!apiKey,
+      keyPrefix: apiKey ? `${apiKey.substring(0, 7)}...` : 'none'
+    })
+    
+    if (!apiKey) {
+      console.error('OpenAI API key not found in environment variables')
+      return NextResponse.json(
+        { error: 'OpenAI API key not configured' },
+        { status: 500 }
+      )
+    }
+
+    // Initialize OpenAI client at runtime
+    const openai = new OpenAI({
+      apiKey: apiKey,
+    })
+
     const { systemPrompt, userMessage, conversationHistory } = await request.json()
 
     if (!systemPrompt || !userMessage) {
@@ -32,10 +48,10 @@ export async function POST(request: NextRequest) {
 
     // Call OpenAI API with available model
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini', // Use available model
+      model: 'gpt-4-turbo-preview', 
       messages,
-      max_tokens: 1000, // Increased for better responses
-      temperature: 0.7,
+      max_tokens: 4000, 
+      temperature: 0.2,
     })
 
     const response = completion.choices[0]?.message?.content || "I'm sorry, I couldn't generate a response."

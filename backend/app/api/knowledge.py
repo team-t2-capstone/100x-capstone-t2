@@ -23,7 +23,8 @@ from app.models.schemas import (
     KnowledgeSearchRequest, KnowledgeSearchResult, SuccessResponse,
     DuplicateCheckRequest, DuplicateCheckResponse, ExistingDocumentInfo
 )
-from app.services.simplified_openai_rag import process_clone_knowledge, query_clone, validate_rag_configuration
+from app.services.rag import clean_rag_service
+from app.services.rag.models import DocumentInfo, QueryRequest
 from app.config import settings
 
 logger = structlog.get_logger()
@@ -378,9 +379,15 @@ async def upload_document(
             # Handle case where it might return a dict with 'publicUrl' key (older versions)
             if isinstance(document_url, dict) and 'publicUrl' in document_url:
                 document_url = document_url['publicUrl']
+            # Clean up URL by removing trailing query parameters that might cause OpenAI issues
+            if document_url and document_url.endswith('?'):
+                document_url = document_url.rstrip('?')
         except Exception as e:
             logger.warning("Could not get public URL for document", error=str(e))
             document_url = f"{settings.SUPABASE_URL}/storage/v1/object/public/knowledge-documents/{file_path}"
+            # Clean up URL by removing trailing query parameters that might cause OpenAI issues
+            if document_url and document_url.endswith('?'):
+                document_url = document_url.rstrip('?')
         
         # Create knowledge entry in Supabase
         knowledge_entry = {
@@ -414,8 +421,13 @@ async def upload_document(
                 detail="Failed to create knowledge entry"
             )
         
-        # Note: Individual document processing will be handled when user triggers batch processing
-        # This keeps the upload endpoint fast and reliable
+        # Automatically trigger RAG processing for the uploaded document
+        background_tasks.add_task(
+            process_document_automatically,
+            clone_id=clone_id,
+            document_id=knowledge_entry["id"],
+            clone_data=clone
+        )
         
         logger.info("Document uploaded successfully", 
                    document_id=knowledge_entry["id"],
@@ -907,12 +919,20 @@ async def process_document_batch(
             "professional_title": clone.get("professional_title", "")
         }
         
-        # Process using simplified OpenAI RAG service
-        result = await process_clone_knowledge(
-            clone_id=clone_id,
-            clone_data=clone_data,
-            documents=document_urls
-        )
+        # Process using CleanRAGService
+        document_list = [
+            DocumentInfo(name=name, url=url, content_type="document")
+            for name, url in document_urls.items()
+        ]
+        result_obj = await clean_rag_service.process_clone_documents(clone_id, document_list)
+        
+        # Convert result to expected format
+        result = {
+            "status": "success" if result_obj.status.value == "completed" else "failed",
+            "assistant_id": result_obj.assistant_id,
+            "processed_documents": result_obj.processed_documents,
+            "error": result_obj.error_message if hasattr(result_obj, 'error_message') else None
+        }
         
         # Update document statuses in database
         if result["status"] == "success":
@@ -1027,22 +1047,20 @@ async def retry_knowledge_processing(
                    document_count=len(document_urls))
         
         # Validate RAG service configuration before retry
-        logger.info("Validating simplified OpenAI RAG service before retry processing")
-        validation_result = await validate_rag_configuration()
+        logger.info("Validating CleanRAG service before retry processing")
+        health_status = await clean_rag_service.get_health_status()
         
-        if not validation_result["valid"]:
-            error_details = "; ".join(validation_result["errors"])
-            solution_details = "; ".join(validation_result["suggestions"])
+        if not health_status.is_healthy:
+            error_details = "; ".join(health_status.issues)
             logger.error("RAG service not available for retry processing",
-                        errors=validation_result["errors"],
-                        suggestions=validation_result["suggestions"])
+                        issues=health_status.issues)
             return {
                 "status": "failed",
                 "overall_status": "failed",
                 "message": "Retry processing failed: RAG service not properly configured",
                 "error": f"RAG service validation failed: {error_details}",
                 "clone_id": clone_id,
-                "solutions": solution_details
+                "solutions": error_details
             }
         
         # Prepare clone data for processing
@@ -1057,14 +1075,14 @@ async def retry_knowledge_processing(
         }
         
         try:
-            # Use simplified OpenAI RAG service for retry processing
-            retry_result = await process_clone_knowledge(
-                clone_id=clone_id,
-                clone_data=clone_data,
-                documents=document_urls
-            )
+            # Use CleanRAGService for retry processing
+            document_list = [
+                DocumentInfo(name=name, url=url, content_type="document")
+                for name, url in document_urls.items()
+            ]
+            retry_result = await clean_rag_service.process_clone_documents(clone_id, document_list)
             
-            if retry_result.get("status") == "success":
+            if retry_result.status.value == "completed":
                 # Update all documents to completed status using service role
                 service_supabase.table("knowledge").update({
                     "vector_store_status": "completed",
@@ -1075,13 +1093,13 @@ async def retry_knowledge_processing(
                     "status": "success",
                     "overall_status": "completed", 
                     "message": "Retry processing completed successfully",
-                    "expert_name": retry_result.get("expert_name"),
-                    "assistant_id": retry_result.get("assistant_id"),
-                    "processed_documents": retry_result.get("processed_documents", 0),
+                    "expert_name": clone.get("name"),
+                    "assistant_id": retry_result.assistant_id,
+                    "processed_documents": retry_result.processed_documents,
                     "clone_id": clone_id
                 }
             else:
-                error_message = retry_result.get('error', 'Processing failed')
+                error_message = retry_result.error_message or 'Processing failed'
                 logger.error("Retry RAG processing failed for clone", 
                             clone_id=clone_id, 
                             error=error_message)
@@ -1172,19 +1190,17 @@ async def process_clone_knowledge_endpoint(
                    document_count=len(document_urls))
 
         # Validate RAG service configuration before processing
-        validation_result = await validate_rag_configuration()
+        health_status = await clean_rag_service.get_health_status()
         
-        if not validation_result["valid"]:
-            error_details = "; ".join(validation_result["errors"])
-            solution_details = "; ".join(validation_result["suggestions"])
+        if not health_status.is_healthy:
+            error_details = "; ".join(health_status.issues)
             logger.error("RAG service not available for processing", 
-                        errors=validation_result["errors"],
-                        suggestions=validation_result["suggestions"])
+                        issues=health_status.issues)
             return {
                 "status": "failed",
                 "message": "RAG processing cannot proceed - service not properly configured",
                 "error": f"RAG service validation failed: {error_details}",
-                "solutions": solution_details,
+                "solutions": error_details,
                 "processed_documents": 0,
                 "clone_id": clone_id,
                 "assistant_id": None,
@@ -1202,12 +1218,21 @@ async def process_clone_knowledge_endpoint(
             "professional_title": clone.get("professional_title", "")
         }
 
-        # Process documents and initialize expert using simplified service
-        processing_result = await process_clone_knowledge(
-            clone_id=clone_id,
-            clone_data=clone_data,
-            documents=document_urls
-        )
+        # Process documents and initialize expert using CleanRAGService
+        document_list = [
+            DocumentInfo(name=name, url=url, content_type="document")
+            for name, url in document_urls.items()
+        ]
+        processing_result_obj = await clean_rag_service.process_clone_documents(clone_id, document_list)
+        
+        # Convert to expected format
+        processing_result = {
+            "status": "success" if processing_result_obj.status.value == "completed" else "failed",
+            "assistant_id": processing_result_obj.assistant_id,
+            "processed_documents": processing_result_obj.processed_documents,
+            "error": processing_result_obj.error_message if hasattr(processing_result_obj, 'error_message') else None,
+            "expert_name": clone_name
+        }
 
         logger.info("Simplified OpenAI RAG processing completed",
                    clone_id=clone_id,
@@ -1291,14 +1316,14 @@ async def rag_health_check() -> Dict[str, Any]:
             health_status["issues"].append(f"Supabase connection failed: {str(e)}")
             health_status["solutions"].append("Verify Supabase credentials and network connectivity")
         
-        # Test using simplified RAG service
+        # Test using CleanRAG service
         try:
-            validation_result = await validate_rag_configuration()
-            if validation_result.get("valid"):
-                logger.info("Simplified RAG service validation successful")
+            service_health = await clean_rag_service.get_health_status()
+            if service_health.is_healthy:
+                logger.info("CleanRAG service validation successful")
             else:
-                health_status["issues"].extend(validation_result.get("errors", []))
-                health_status["solutions"].extend(validation_result.get("suggestions", []))
+                health_status["issues"].extend(service_health.issues)
+                health_status["solutions"].extend(service_health.issues)
         except Exception as e:
             health_status["issues"].append(f"RAG service validation failed: {str(e)}")
             health_status["solutions"].append("Check RAG service configuration")
@@ -1382,8 +1407,14 @@ async def query_clone_expert_endpoint(
                    clone_id=clone_id,
                    query_length=len(query_text))
 
-        # Query using simplified OpenAI RAG service
-        rag_response = await query_clone(clone_id=clone_id, query=query_text, thread_id=thread_id)
+        # Query using CleanRAGService
+        query_request = QueryRequest(
+            clone_id=clone_id,
+            query=query_text,
+            max_tokens=1000,
+            temperature=0.7
+        )
+        rag_response = await clean_rag_service.query_clone(query_request)
 
         logger.info("Clone expert query completed",
                    clone_id=clone_id,
@@ -1391,11 +1422,11 @@ async def query_clone_expert_endpoint(
 
         # Return structured response
         return {
-            "response": {"text": rag_response.answer},
+            "response": {"text": rag_response.response},
             "thread_id": rag_response.thread_id,
             "assistant_id": rag_response.assistant_id,
-            "sources": rag_response.sources,
-            "confidence": rag_response.confidence,
+            "sources": getattr(rag_response, 'sources', []),
+            "confidence": getattr(rag_response, 'confidence', 0.8),
             "clone_id": clone_id,
             "query": query_text,
             "timestamp": datetime.utcnow().isoformat()
@@ -1408,4 +1439,326 @@ async def query_clone_expert_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to query clone expert: {str(e)}"
+        )
+
+
+async def process_document_automatically(clone_id: str, document_id: str, clone_data: dict):
+    """
+    Background task to automatically process uploaded documents through RAG workflow
+    """
+    try:
+        logger.info("Starting automatic document processing", 
+                   clone_id=clone_id, 
+                   document_id=document_id)
+        
+        service_supabase = get_service_supabase()
+        if not service_supabase:
+            logger.error("Service Supabase client not available for automatic processing")
+            return
+        
+        # Update document status to processing
+        service_supabase.table("knowledge").update({
+            "vector_store_status": "processing",
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("id", document_id).execute()
+        
+        # Get the uploaded document details
+        doc_response = service_supabase.table("knowledge").select("*").eq("id", document_id).execute()
+        if not doc_response.data:
+            logger.error("Document not found for processing", document_id=document_id)
+            return
+            
+        document = doc_response.data[0]
+        
+        # Process using CleanRAGService directly
+        try:
+            # Prepare document for processing - convert file path to accessible URL
+            file_path = document["metadata"]["file_path"]
+            
+            # Get Supabase storage URL for the file
+            try:
+                storage_url = service_supabase.storage.from_("knowledge-documents").get_public_url(file_path)
+                if isinstance(storage_url, dict) and 'publicUrl' in storage_url:
+                    storage_url = storage_url['publicUrl']
+                elif not storage_url:
+                    # Fallback: create direct URL if get_public_url doesn't work
+                    supabase_url = settings.SUPABASE_URL
+                    storage_url = f"{supabase_url}/storage/v1/object/public/knowledge-documents/{file_path}"
+                
+                # Clean up URL by removing trailing query parameters
+                if storage_url and storage_url.endswith('?'):
+                    storage_url = storage_url.rstrip('?')
+                    
+            except Exception as e:
+                logger.error("Failed to get storage URL", error=str(e), file_path=file_path)
+                # Create fallback URL
+                supabase_url = settings.SUPABASE_URL
+                storage_url = f"{supabase_url}/storage/v1/object/public/knowledge-documents/{file_path}"
+            
+            logger.info("Starting CleanRAG processing", clone_id=clone_id)
+            
+            # Create document info for CleanRAGService
+            document_list = [
+                DocumentInfo(
+                    name=document.get("title", "Uploaded Document"),
+                    url=storage_url,
+                    content_type="document"
+                )
+            ]
+            
+            # Process using CleanRAGService
+            result = await clean_rag_service.process_clone_documents(clone_id, document_list)
+            
+            if result.status.value == "completed":
+                # Update document and clone status
+                service_supabase.table("knowledge").update({
+                    "vector_store_status": "completed",
+                    "updated_at": datetime.utcnow().isoformat()
+                }).eq("id", document_id).execute()
+                
+                # Update clone with RAG status
+                service_supabase.table("clones").update({
+                    "rag_status": "completed",
+                    "document_processing_status": "completed",
+                    "rag_assistant_id": result.assistant_id,
+                    "updated_at": datetime.utcnow().isoformat()
+                }).eq("id", clone_id).execute()
+                
+                logger.info("CleanRAG processing completed successfully", 
+                           clone_id=clone_id, 
+                           document_id=document_id,
+                           processed_documents=result.processed_documents)
+                return
+            else:
+                logger.error("CleanRAG processing failed", 
+                           clone_id=clone_id, 
+                           error=result.error_message)
+                
+        except Exception as e:
+            logger.error("CleanRAG processing failed with exception", 
+                         clone_id=clone_id, 
+                         error=str(e))
+            
+            # Mark document as failed
+            service_supabase.table("knowledge").update({
+                "vector_store_status": "failed",
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("id", document_id).execute()
+            
+    except Exception as e:
+        logger.error("Automatic document processing failed completely", 
+                   clone_id=clone_id, 
+                   document_id=document_id,
+                   error=str(e))
+        
+        # Try to mark document as failed
+        try:
+            service_supabase = get_service_supabase()
+            if service_supabase:
+                service_supabase.table("knowledge").update({
+                    "vector_store_status": "failed",
+                    "updated_at": datetime.utcnow().isoformat()
+                }).eq("id", document_id).execute()
+        except:
+            pass  # Don't fail if we can't update status
+
+
+@router.post("/test/upload-document-no-auth", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
+async def test_upload_document_no_auth(
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    description: Optional[str] = Form(None),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+) -> DocumentResponse:
+    """
+    TEST ENDPOINT: Upload a document without authentication for testing RAG workflow
+    This endpoint should be removed in production!
+    """
+    try:
+        # Validate file
+        validate_file(file)
+        
+        # Create a test clone for testing (use proper UUIDs)
+        test_clone_id = "12345678-1234-1234-1234-123456789abc"
+        test_user_id = "87654321-4321-4321-4321-cba987654321"
+        
+        # Use service role client
+        service_supabase = get_service_supabase()
+        if not service_supabase:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Service role client not available"
+            )
+        
+        # Use an existing clone or get any available clone for testing
+        clone_response = service_supabase.table("clones").select("*").eq("id", test_clone_id).execute()
+        
+        if not clone_response.data:
+            # Try to get any existing clone for testing
+            all_clones_response = service_supabase.table("clones").select("*").limit(1).execute()
+            
+            if all_clones_response.data:
+                clone = all_clones_response.data[0]
+                test_clone_id = clone["id"]
+                logger.info("Using existing clone for testing", clone_id=test_clone_id, clone_name=clone.get("name"))
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="No clones available for testing. Please create a clone first through the UI."
+                )
+        else:
+            clone = clone_response.data[0]
+        
+        # Process file upload (same logic as main upload endpoint)
+        file_content = await file.read()
+        file_size = len(file_content)
+        
+        # Check file size
+        if file_size > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File size {file_size / 1024 / 1024:.1f}MB exceeds maximum {settings.MAX_FILE_SIZE_MB}MB"
+            )
+        
+        # Calculate file hash
+        content_hash = calculate_file_hash(file_content)
+        
+        # Generate unique filename and path
+        file_extension = Path(file.filename).suffix.lower()
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        file_path = f"documents/{test_clone_id}/{unique_filename}"
+        
+        # Upload to Supabase Storage
+        try:
+            storage_response = service_supabase.storage.from_("documents").upload(
+                file_path, file_content, {"content-type": file.content_type}
+            )
+            logger.info("File uploaded to storage", file_path=file_path)
+        except Exception as e:
+            logger.error("Storage upload failed", error=str(e))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to upload file to storage: {str(e)}"
+            )
+        
+        # Create knowledge entry
+        knowledge_entry = {
+            "id": str(uuid.uuid4()),
+            "clone_id": test_clone_id,
+            "title": title,
+            "description": description or "",
+            "content_type": "document",
+            "file_name": file.filename,
+            "file_size_bytes": file_size,
+            "file_type": file_extension[1:],
+            "tags": [],
+            "metadata": {
+                "file_path": file_path,
+                "content_hash": content_hash
+            },
+            "vector_store_status": "pending",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        
+        # Insert into knowledge table
+        insert_response = service_supabase.table("knowledge").insert(knowledge_entry).execute()
+        
+        if not insert_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create knowledge entry"
+            )
+        
+        # Trigger RAG processing automatically
+        background_tasks.add_task(
+            process_document_automatically,
+            clone_id=test_clone_id,
+            document_id=knowledge_entry["id"],
+            clone_data=clone
+        )
+        
+        logger.info("TEST: Document uploaded and RAG processing triggered", 
+                   document_id=knowledge_entry["id"],
+                   clone_id=test_clone_id,
+                   file_name=file.filename)
+        
+        # Convert to DocumentResponse format
+        doc_response = DocumentResponse(
+            id=knowledge_entry["id"],
+            clone_id=test_clone_id,
+            title=title,
+            description=description,
+            file_name=file.filename,
+            file_path=file_path,
+            file_type=file_extension[1:],
+            file_size_bytes=file_size,
+            processing_status="pending",
+            chunk_count=0,
+            tags=[],
+            doc_metadata=knowledge_entry["metadata"],
+            upload_date=datetime.fromisoformat(knowledge_entry["created_at"].replace('Z', '+00:00'))
+        )
+        
+        return doc_response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("TEST: Document upload failed", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to upload document: {str(e)}"
+        )
+
+
+@router.get("/test/document-status/{document_id}")
+async def test_get_document_status(document_id: str):
+    """
+    TEST ENDPOINT: Get document processing status without authentication
+    This endpoint should be removed in production!
+    """
+    try:
+        service_supabase = get_service_supabase()
+        if not service_supabase:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Service role client not available"
+            )
+        
+        # Get document status
+        doc_response = service_supabase.table("knowledge").select("*").eq("id", document_id).execute()
+        
+        if not doc_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found"
+            )
+        
+        document = doc_response.data[0]
+        
+        # Get clone status too
+        clone_response = service_supabase.table("clones").select("*").eq("id", document["clone_id"]).execute()
+        clone_data = clone_response.data[0] if clone_response.data else {}
+        
+        return {
+            "document_id": document_id,
+            "clone_id": document["clone_id"],
+            "title": document["title"],
+            "processing_status": document.get("vector_store_status", "unknown"),
+            "created_at": document["created_at"],
+            "updated_at": document["updated_at"],
+            "clone_rag_status": clone_data.get("rag_status", "unknown"),
+            "clone_processing_status": clone_data.get("document_processing_status", "unknown"),
+            "rag_assistant_id": clone_data.get("rag_assistant_id"),
+            "enhanced_rag": clone_data.get("rag_status") == "enhanced"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("TEST: Status check failed", error=str(e), document_id=document_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get document status: {str(e)}"
         )

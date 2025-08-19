@@ -24,6 +24,7 @@ from app.core.security import get_security_headers
 
 # Import API routers
 from app.api import clones, knowledge, users, discovery, rag, sessions, chat, memory, summarization, analytics, billing, ai_chat, chat_websocket, webrtc, voice_video_calls
+from app.api.v1 import clones_process_knowledge
 
 # Import auth conditionally
 try:
@@ -148,6 +149,7 @@ app.include_router(analytics.router, prefix=settings.API_V1_STR)
 app.include_router(billing.router, prefix=settings.API_V1_STR)
 app.include_router(webrtc.router, prefix=settings.API_V1_STR)
 app.include_router(voice_video_calls.router, prefix=settings.API_V1_STR)
+app.include_router(clones_process_knowledge.router, prefix=settings.API_V1_STR)
 
 # Health check endpoints
 @app.get("/health")
@@ -213,30 +215,34 @@ async def detailed_health_check() -> Dict[str, Any]:
             "message": f"Supabase client error: {str(e)}"
         }
     
-    # Check RAG service (direct integration)
+    # Check Clean RAG service
     try:
-        # Import and test RAG configuration
-        from app.services.simplified_openai_rag import validate_rag_configuration
-        rag_validation = await validate_rag_configuration()
+        from app.services.rag import CleanRAGService
+        rag_service = CleanRAGService()
+        rag_health = await rag_service.get_health_status()
         
-        if rag_validation["valid"]:
+        if rag_health.is_healthy:
             health_status["services"]["rag"] = {
                 "status": "healthy",
-                "message": "RAG service ready and configured",
-                "openai_configured": rag_validation["openai_configured"],
-                "supabase_configured": rag_validation["supabase_configured"]
+                "message": "Clean RAG service ready and configured",
+                "openai_configured": rag_health.openai_configured,
+                "supabase_configured": rag_health.supabase_configured,
+                "vector_stores_active": rag_health.vector_stores_active,
+                "assistants_active": rag_health.assistants_active,
+                "last_check": rag_health.last_check
             }
         else:
             health_status["services"]["rag"] = {
                 "status": "unhealthy",
-                "message": f"RAG service has configuration issues: {'; '.join(rag_validation['errors'])}",
-                "errors": rag_validation["errors"],
-                "solutions": rag_validation["suggestions"]
+                "message": "Clean RAG service has configuration issues",
+                "openai_configured": rag_health.openai_configured,
+                "supabase_configured": rag_health.supabase_configured,
+                "issues": rag_health.issues
             }
     except Exception as e:
         health_status["services"]["rag"] = {
             "status": "unhealthy",
-            "message": f"RAG service check failed: {str(e)}"
+            "message": f"Clean RAG service check failed: {str(e)}"
         }
     
     # Check Redis (placeholder)

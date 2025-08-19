@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { AlertCircle, CheckCircle2, Clock, FileText, RefreshCw, Search, Loader2, Zap, Database } from 'lucide-react'
 import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/hooks/use-toast'
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/utils/supabase/client'
 
 interface ProcessingStats {
   total_documents: number
@@ -46,6 +46,7 @@ export function ProcessingMonitor({ cloneId, refreshInterval = 5000 }: Processin
   const loadStats = async () => {
     try {
       // Get documents for this clone
+      const supabase = createClient()
       const { data: documents, error: docsError } = await supabase
         .from('documents')
         .select('id, processing_status, chunk_count')

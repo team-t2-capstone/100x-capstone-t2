@@ -8,7 +8,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
+import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 
 interface CleanupProgress {
@@ -35,7 +35,22 @@ export async function DELETE(
   try {
     const { cloneId } = params;
     const cookieStore = cookies();
-    const supabase = createRouteHandlerClient({ cookies: () => cookieStore });
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return cookieStore.getAll()
+          },
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value, options }) =>
+              cookieStore.set(name, value, options)
+            )
+          },
+        },
+      }
+    );
     
     // Get current user
     const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -181,11 +196,20 @@ export async function DELETE(
     cleanupResult.steps.push(backendStep);
 
     try {
-      const backendUrl = process.env.BACKEND_API_URL || 'http://localhost:8001';
+      const backendUrl = process.env.BACKEND_API_URL || process.env.BACKEND_URL || 'http://localhost:8000';
+      
+      // Get the user's JWT token from the session
+      const { data: { session } } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+      
+      if (!accessToken) {
+        throw new Error('No access token available for backend authentication');
+      }
+      
       const backendResponse = await fetch(`${backendUrl}/api/v1/clones/${cloneId}`, {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${user.id}`, // This would need proper JWT token
+          'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json'
         }
       });

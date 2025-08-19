@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     SUPABASE_ANON_KEY: Optional[str] = None  # Explicit anon key
     SUPABASE_SERVICE_KEY: Optional[str] = None
     SUPABASE_JWT_SECRET: Optional[str] = None  # JWT secret for token verification
+    SUPABASE_ACCESS_TOKEN: Optional[str] = None  # Management API access token
     
     # OpenAI settings
     OPENAI_API_KEY: Optional[str] = None

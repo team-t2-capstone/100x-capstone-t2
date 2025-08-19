@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/hooks/use-toast'
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/utils/supabase/client'
 
 interface SearchResult {
   chunk_id: string
@@ -69,6 +69,7 @@ export function KnowledgeSearch({ cloneId, onResultSelect }: KnowledgeSearchProp
       const startTime = Date.now()
       
       // Get documents for this clone first
+      const supabase = createClient()
       const { data: documents, error: docsError } = await supabase
         .from('documents')
         .select('id, title, file_name')

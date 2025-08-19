@@ -1042,14 +1042,16 @@ async def get_clone_stats(
 async def process_clone_knowledge(
     clone_id: str,
     request: DocumentProcessingRequest,
+    use_enhanced_rag: bool = Query(default=False, description="Use enhanced RAG processing with hybrid search"),
+    chunking_strategy: str = Query(default="sentence_boundary", description="Chunking strategy: fixed_size, sentence_boundary, or semantic"),
     current_user_id: str = Depends(get_current_user_id)
 ) -> KnowledgeProcessingStatus:
     """
-    Process knowledge documents for a clone using RAG workflow
+    Process knowledge documents for a clone using RAG workflow with optional enhanced features
     """
     try:
         # Import here to avoid circular imports
-        from app.services.rag_integration import process_clone_knowledge
+        from app.services.rag_integration_wrapper import process_clone_knowledge
         
         # Use service role client for administrative operations
         service_supabase = get_service_supabase()
@@ -1084,7 +1086,70 @@ async def process_clone_knowledge(
         clone_background = clone_data.get("bio", "")
         personality_traits = str(clone_data.get("personality_traits", {}))
         
-        # Process the knowledge using RAG integration
+        # Use enhanced RAG if requested
+        if use_enhanced_rag:
+            try:
+                from app.services.rag import clean_rag_service
+                from app.services.rag.models import DocumentInfo
+                
+                # Combine documents and links into a document list for CleanRAGService
+                document_list = []
+                if request.documents:
+                    for doc_name, doc_url in request.documents.items():
+                        document_list.append(DocumentInfo(name=doc_name, url=doc_url, content_type="document"))
+                if request.links:
+                    for i, link in enumerate(request.links):
+                        document_list.append(DocumentInfo(name=f"Link_{i+1}", url=link, content_type="link"))
+                
+                logger.info(f"Using CleanRAG processing for clone {clone_id}")
+                
+                # Process using CleanRAGService
+                enhanced_result_obj = await clean_rag_service.process_clone_documents(
+                    clone_id=clone_id,
+                    documents=document_list
+                )
+                
+                # Convert to expected format
+                enhanced_result = {
+                    "status": "success" if enhanced_result_obj.status.value == "completed" else "failed",
+                    "assistant_id": enhanced_result_obj.assistant_id,
+                    "processed_documents": enhanced_result_obj.processed_documents,
+                    "error": enhanced_result_obj.error_message if hasattr(enhanced_result_obj, 'error_message') else None
+                }
+                
+                if enhanced_result.get("status") == "success":
+                    # Update clone with enhanced RAG status
+                    rag_update_data = {
+                        "rag_status": "completed",
+                        "document_processing_status": "completed", 
+                        "rag_assistant_id": enhanced_result.get("assistant_id"),
+                        "updated_at": datetime.utcnow().isoformat()
+                    }
+                    
+                    service_supabase.table("clones").update(rag_update_data).eq("id", clone_id).execute()
+                    
+                    # Return enhanced processing status
+                    return KnowledgeProcessingStatus(
+                        expert_name=f"{clone_name} (CleanRAG)",
+                        domain_name=clone_expertise_str,
+                        overall_status="completed",
+                        rag_assistant_id=enhanced_result.get("assistant_id"),
+                        processing_details={
+                            "rag_type": "enhanced",
+                            "chunks_processed": enhanced_result.get("chunks_processed", 0),
+                            "documents_processed": enhanced_result.get("documents_processed", 0),
+                            "chunking_strategy": strategy.value
+                        }
+                    )
+                else:
+                    logger.warning(f"Enhanced RAG processing failed for clone {clone_id}, falling back to standard RAG")
+                    use_enhanced_rag = False
+                    
+            except Exception as e:
+                logger.warning(f"Enhanced RAG processing failed for clone {clone_id}: {str(e)}, falling back to standard RAG")
+                use_enhanced_rag = False
+        
+        # Standard RAG processing (fallback or default)
         processing_status = await process_clone_knowledge(
             clone_id=clone_id,
             clone_name=clone_name,
@@ -1186,15 +1251,15 @@ async def get_processing_status(
 async def query_clone_expert(
     clone_id: str,
     request: RAGQueryRequest,
+    use_enhanced_rag: bool = Query(default=False, description="Use enhanced RAG with hybrid search"),
+    search_strategy: Optional[str] = Query(default="hybrid", description="Search strategy: vector, keyword, or hybrid"),
+    top_k: int = Query(default=5, ge=1, le=10, description="Number of top results to retrieve"),
     current_user_id: str = Depends(get_current_user_id)
 ) -> RAGQueryResponse:
     """
-    Query a clone's RAG expert for testing and chat
+    Query a clone's RAG expert for testing and chat with optional enhanced RAG features
     """
     try:
-        # Import here to avoid circular imports
-        from app.services.rag_integration import query_clone_expert
-        
         # Use service role client for administrative operations
         service_supabase = get_service_supabase()
         if not service_supabase:
@@ -1214,7 +1279,63 @@ async def query_clone_expert(
         
         clone_data = response.data[0]
         
-        # Check if clone has been processed
+        # Check access permissions
+        if not clone_data.get("is_published") and clone_data.get("creator_id") != current_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to query this clone"
+            )
+        
+        # Use enhanced RAG if requested and available
+        if use_enhanced_rag and clone_data.get("rag_status") in ["completed", "enhanced"]:
+            try:
+                from app.services.rag import clean_rag_service
+                from app.services.rag.models import QueryRequest
+                
+                logger.info(f"Using CleanRAG service for clone {clone_id}")
+                
+                query_request = QueryRequest(
+                    clone_id=clone_id,
+                    query=request.query,
+                    max_tokens=1000,
+                    temperature=0.7
+                )
+                
+                rag_result = await clean_rag_service.query_clone(query_request)
+                
+                # Convert to expected format
+                result = {
+                    "status": "success" if rag_result.response else "failed",
+                    "response": {"text": rag_result.response},
+                    "thread_id": rag_result.thread_id,
+                    "assistant_id": rag_result.assistant_id,
+                    "sources": getattr(rag_result, 'sources', []),
+                    "confidence": getattr(rag_result, 'confidence', 0.8)
+                }
+                
+                if result.get("status") == "failed":
+                    logger.warning(f"Enhanced RAG failed for clone {clone_id}, falling back to standard RAG")
+                    use_enhanced_rag = False
+                else:
+                    # Return enhanced RAG response
+                    return RAGQueryResponse(
+                        response=result["response"]["text"],
+                        citations=result.get("citations", []),
+                        metadata={
+                            "search_strategy": result["search_strategy_used"],
+                            "search_results_count": result["search_results_count"],
+                            "response_time_ms": result["response_time_ms"],
+                            "thread_id": result.get("thread_id"),
+                            "rag_type": "enhanced"
+                        }
+                    )
+                    
+            except Exception as e:
+                logger.warning(f"Enhanced RAG failed for clone {clone_id}: {str(e)}, falling back to standard RAG")
+                use_enhanced_rag = False
+        
+        # Standard RAG processing (fallback or default)
+        # Check if clone has been processed with standard RAG
         if not clone_data.get("rag_expert_name"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

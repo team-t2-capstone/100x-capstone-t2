@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/utils/supabase/client'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
@@ -114,6 +114,7 @@ export default function HomePage() {
     const fetchData = async () => {
       try {
         // Fetch featured experts
+        const supabase = createClient()
         const { data: expertsData, error: expertsError } = await supabase
           .from('clones')
           .select('*')

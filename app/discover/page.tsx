@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect } from "react"
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/utils/supabase/client'
 import { useAuth } from '@/contexts/auth-context'
 import { toast } from '@/components/ui/use-toast'
 import { Button } from "@/components/ui/button"
