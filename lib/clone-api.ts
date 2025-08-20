@@ -1,9 +1,7 @@
 /**
  * Clone API Client - Manages AI clone creation and management
  */
-import { getAuthTokens } from './api-client';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import { apiClient, parseApiError } from './api-client';
 
 export interface CloneCreateRequest {
   name: string;
@@ -33,9 +31,12 @@ export interface CloneResponse {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  published_at?: string;
   avatar_url?: string;
-  rating: number;
+  voice_id?: string;
+  average_rating: number;
   total_sessions: number;
+  total_earnings: number;
 }
 
 export interface CloneListResponse {
@@ -51,55 +52,34 @@ export interface CloneListResponse {
 }
 
 export class CloneApi {
-  private getHeaders() {
-    const { accessToken } = getAuthTokens();
-    return {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${accessToken}`,
-    };
-  }
-
   async createClone(data: CloneCreateRequest): Promise<CloneResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/v1/clones`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify(data),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-      throw new Error(error.detail || `Failed to create clone: ${response.status}`);
+    try {
+      const response = await apiClient.post('/clones', data);
+      return response.data;
+    } catch (error) {
+      const apiError = parseApiError(error as any);
+      throw new Error(apiError.message);
     }
-
-    return response.json();
   }
 
   async updateClone(id: string, data: Partial<CloneCreateRequest>): Promise<CloneResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/v1/clones/${id}`, {
-      method: 'PUT',
-      headers: this.getHeaders(),
-      body: JSON.stringify(data),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-      throw new Error(error.detail || `Failed to update clone: ${response.status}`);
+    try {
+      const response = await apiClient.put(`/clones/${id}`, data);
+      return response.data;
+    } catch (error) {
+      const apiError = parseApiError(error as any);
+      throw new Error(apiError.message);
     }
-
-    return response.json();
   }
 
   async getClone(id: string): Promise<CloneResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/v1/clones/${id}`, {
-      headers: this.getHeaders(),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-      throw new Error(error.detail || `Failed to fetch clone: ${response.status}`);
+    try {
+      const response = await apiClient.get(`/clones/${id}`);
+      return response.data;
+    } catch (error) {
+      const apiError = parseApiError(error as any);
+      throw new Error(apiError.message || 'Failed to retrieve clone');
     }
-
-    return response.json();
   }
 
   async listClones(params?: {
@@ -111,66 +91,42 @@ export class CloneApi {
     price_max?: number;
     creator_id?: string;
   }): Promise<CloneListResponse> {
-    const searchParams = new URLSearchParams();
-    
-    if (params) {
-      Object.entries(params).forEach(([key, value]) => {
-        if (value !== undefined && value !== null) {
-          searchParams.append(key, value.toString());
-        }
-      });
+    try {
+      const response = await apiClient.get('/clones', { params });
+      return response.data;
+    } catch (error) {
+      const apiError = parseApiError(error as any);
+      throw new Error(apiError.message);
     }
-
-    const response = await fetch(`${API_BASE_URL}/api/v1/clones?${searchParams}`, {
-      headers: this.getHeaders(),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-      throw new Error(error.detail || `Failed to list clones: ${response.status}`);
-    }
-
-    return response.json();
   }
 
   async deleteClone(id: string): Promise<void> {
-    const response = await fetch(`${API_BASE_URL}/api/v1/clones/${id}`, {
-      method: 'DELETE',
-      headers: this.getHeaders(),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-      throw new Error(error.detail || `Failed to delete clone: ${response.status}`);
+    try {
+      await apiClient.delete(`/clones/${id}`);
+    } catch (error) {
+      const apiError = parseApiError(error as any);
+      throw new Error(apiError.message);
     }
   }
 
   async publishClone(id: string): Promise<CloneResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/v1/clones/${id}/publish`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-      throw new Error(error.detail || `Failed to publish clone: ${response.status}`);
+    try {
+      const response = await apiClient.post(`/clones/${id}/publish`);
+      return response.data;
+    } catch (error) {
+      const apiError = parseApiError(error as any);
+      throw new Error(apiError.message);
     }
-
-    return response.json();
   }
 
   async unpublishClone(id: string): Promise<CloneResponse> {
-    const response = await fetch(`${API_BASE_URL}/api/v1/clones/${id}/unpublish`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-      throw new Error(error.detail || `Failed to unpublish clone: ${response.status}`);
+    try {
+      const response = await apiClient.post(`/clones/${id}/unpublish`);
+      return response.data;
+    } catch (error) {
+      const apiError = parseApiError(error as any);
+      throw new Error(apiError.message);
     }
-
-    return response.json();
   }
 
   async getUserClones(params?: {
@@ -178,26 +134,13 @@ export class CloneApi {
     limit?: number;
     published_only?: boolean;
   }): Promise<CloneListResponse> {
-    const searchParams = new URLSearchParams();
-    
-    if (params) {
-      Object.entries(params).forEach(([key, value]) => {
-        if (value !== undefined && value !== null) {
-          searchParams.append(key, value.toString());
-        }
-      });
+    try {
+      const response = await apiClient.get('/clones/my-clones', { params });
+      return response.data;
+    } catch (error) {
+      const apiError = parseApiError(error as any);
+      throw new Error(apiError.message);
     }
-
-    const response = await fetch(`${API_BASE_URL}/api/v1/clones/my-clones?${searchParams}`, {
-      headers: this.getHeaders(),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-      throw new Error(error.detail || `Failed to fetch user clones: ${response.status}`);
-    }
-
-    return response.json();
   }
 }
 

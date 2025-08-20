@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { LogOut, User, Settings, CreditCard, Menu, X, Upload } from 'lucide-react';
+import { LogOut, User, Settings, Menu, X, Upload } from 'lucide-react';
 
 import { useAuth } from '@/contexts/auth-context';
 import { Button } from '@/components/ui/button';
@@ -118,12 +118,6 @@ export function Navbar() {
                     Settings
                   </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/billing" className="flex items-center">
-                    <CreditCard className="mr-2 h-4 w-4" />
-                    Billing
-                  </Link>
-                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem 
                   onClick={handleLogout}
@@ -210,15 +204,6 @@ export function Navbar() {
                       >
                         <Settings className="mr-2 h-4 w-4" />
                         Settings
-                      </Link>
-                    </Button>
-                    <Button variant="ghost" className="justify-start" asChild>
-                      <Link 
-                        href="/billing" 
-                        onClick={() => setMobileMenuOpen(false)}
-                      >
-                        <CreditCard className="mr-2 h-4 w-4" />
-                        Billing
                       </Link>
                     </Button>
                     <Button 

@@ -376,7 +376,7 @@ async def end_call_session(
     current_user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db_session)
 ):
-    """End a call session and finalize billing"""
+    """End a call session"""
     try:
         # Get session from database
         session_result = await db.execute(

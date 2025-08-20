@@ -46,38 +46,20 @@ const expertTypes = {
 
 // Mock data removed - now using real Supabase data from hooks
 
-// Function to calculate clone completion percentage  
-const calculateCloneCompletion = (clone: any): number => {
-  let completedSteps = 0
-  const totalSteps = 4 // Only count essential steps
+// Function to determine clone completion status
+const getCloneStatus = (clone: any): 'completed' | 'in_progress' => {
+  // Check if user has reached Testing & Preview stage (step 6)
+  // This can be determined by checking if essential setup is done
+  const hasBasicInfo = clone.name && clone.professional_title && clone.category && clone.bio
+  const hasQATraining = clone.is_published || clone.credentials_qualifications || clone.expertise_areas?.length > 0
+  const hasPersonality = clone.personality_traits && Object.keys(clone.personality_traits).length > 0
   
-  // Step 1: Basic Information (25%)
-  if (clone.name && clone.professional_title && clone.category && clone.bio) {
-    // Also check credentials if provided
-    if (clone.credentials_qualifications || clone.expertise_areas?.length > 0) {
-      completedSteps++
-    }
+  // If user has completed basic setup (steps 1-4), they likely reached Testing & Preview
+  if (hasBasicInfo && hasQATraining && hasPersonality) {
+    return 'completed'
   }
   
-  // Step 2: Q&A Training (25%) 
-  // This should only be marked complete if actual Q&A responses exist
-  // For now, we'll be strict and not count this unless published
-  if (clone.is_published) {
-    completedSteps++ // Only count if published (means Q&A was done)
-  }
-  
-  // Step 3: Personality & Style (25%)
-  if (clone.personality_traits && Object.keys(clone.personality_traits).length > 0 &&
-      clone.communication_style && Object.keys(clone.communication_style).length > 0) {
-    completedSteps++
-  }
-  
-  // Step 4: Pricing & Launch (25%)  
-  if (clone.base_price && clone.base_price > 0 && clone.is_published) {
-    completedSteps++
-  }
-  
-  return Math.round((completedSteps / totalSteps) * 100)
+  return 'in_progress'
 }
 
 export default function CreatorDashboardPage() {
@@ -328,11 +310,12 @@ export default function CreatorDashboardPage() {
                                   >
                                     {clone.status}
                                   </Badge>
-                                  {calculateCloneCompletion(clone) < 100 && (
-                                    <Badge variant="outline" className="text-xs">
-                                      {calculateCloneCompletion(clone)}% Complete
-                                    </Badge>
-                                  )}
+                                  <Badge 
+                                    variant={getCloneStatus(clone) === 'completed' ? 'default' : 'outline'} 
+                                    className={`text-xs ${getCloneStatus(clone) === 'completed' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : ''}`}
+                                  >
+                                    {getCloneStatus(clone) === 'completed' ? 'Completed' : 'In Progress'}
+                                  </Badge>
                                 </div>
                               </div>
                             </div>
@@ -356,7 +339,7 @@ export default function CreatorDashboardPage() {
                             </div>
 
                             <div className="flex space-x-2 mt-4">
-                              {calculateCloneCompletion(clone) < 100 ? (
+                              {getCloneStatus(clone) === 'in_progress' ? (
                                 <Link href={`/create-clone/wizard?clone_id=${clone.id}`} className="flex-1">
                                   <Button variant="default" size="sm" className="w-full">
                                     <Edit className="h-4 w-4 mr-2" />
@@ -364,7 +347,7 @@ export default function CreatorDashboardPage() {
                                   </Button>
                                 </Link>
                               ) : (
-                                <Link href={`/clone/${clone.id}`} className="flex-1">
+                                <Link href={`/create-clone/wizard?clone_id=${clone.id}&step=6`} className="flex-1">
                                   <Button variant="outline" size="sm" className="w-full bg-transparent">
                                     <Eye className="h-4 w-4 mr-2" />
                                     View
@@ -496,11 +479,12 @@ export default function CreatorDashboardPage() {
                             >
                               {clone.status}
                             </Badge>
-                            {calculateCloneCompletion(clone) < 100 && (
-                              <Badge variant="outline" className="text-xs">
-                                {calculateCloneCompletion(clone)}% Setup
-                              </Badge>
-                            )}
+                            <Badge 
+                              variant={getCloneStatus(clone) === 'completed' ? 'default' : 'outline'} 
+                              className={`text-xs ${getCloneStatus(clone) === 'completed' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : ''}`}
+                            >
+                              {getCloneStatus(clone) === 'completed' ? 'Completed' : 'In Progress'}
+                            </Badge>
                           </div>
                         </div>
                         <Button variant="ghost" size="sm">
@@ -524,13 +508,12 @@ export default function CreatorDashboardPage() {
                           <span className="text-slate-600 dark:text-slate-300">Total Earnings:</span>
                           <span className="font-medium text-green-600">${clone.total_earnings || '0.00'}</span>
                         </div>
-                        {calculateCloneCompletion(clone) < 100 && (
+                        {getCloneStatus(clone) === 'in_progress' && (
                           <div className="space-y-1">
                             <div className="flex justify-between text-sm">
-                              <span className="text-slate-600 dark:text-slate-300">Setup Progress:</span>
-                              <span className="font-medium">{calculateCloneCompletion(clone)}%</span>
+                              <span className="text-slate-600 dark:text-slate-300">Setup Status:</span>
+                              <span className="font-medium text-orange-600">In Progress</span>
                             </div>
-                            <Progress value={calculateCloneCompletion(clone)} className="h-2" />
                           </div>
                         )}
                         <div className="flex justify-between text-sm">
@@ -560,7 +543,7 @@ export default function CreatorDashboardPage() {
                       </div>
 
                       <div className="flex space-x-2">
-                        <Link href={`/clone/${clone.id}`} className="flex-1">
+                        <Link href={`/create-clone/wizard?clone_id=${clone.id}&step=6`} className="flex-1">
                           <Button variant="outline" size="sm" className="w-full bg-transparent">
                             <Eye className="h-4 w-4 mr-2" />
                             View

@@ -42,13 +42,6 @@ class ChatSession:
     """Legacy SQLAlchemy ChatSession model - no longer used"""
     pass
 
-class BillingTransaction:
-    """Legacy SQLAlchemy BillingTransaction model - no longer used"""
-    pass
-
-class Subscription:
-    """Legacy SQLAlchemy Subscription model - no longer used"""
-    pass
 
 class ConversationMemory:
     """Legacy SQLAlchemy ConversationMemory model - no longer used"""
@@ -102,8 +95,7 @@ class ChatMessage:
 __all__ = [
     'UserProfile', 'Clone', 'Session', 'UserAnalytics', 'Document', 
     'KnowledgeEntry', 'CloneRating', 'Message', 'ChatSession',
-    'BillingTransaction', 'Subscription', 'ConversationMemory',
-    'UserMemoryContext', 'CloneLearning', 'DocumentChunk',
+    'ConversationMemory', 'UserMemoryContext', 'CloneLearning', 'DocumentChunk',
     'SessionSummary', 'SummaryTemplate', 'MemoryPolicy', 
     'MemoryUsageStats', 'BulkSummarizationJob', 'RefreshToken',
     'CreatorAnalytics', 'ChatMessage'

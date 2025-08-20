@@ -228,20 +228,106 @@ class ChatService:
         conversation_history: List[ChatMessage] = None,
         db: AsyncSession = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Generate AI response with RAG context"""
+        """Generate AI response with enhanced RAG integration"""
         try:
             logger.info("Generating RAG response", 
                        clone_id=clone_id,
                        session_id=session_id,
                        message_length=len(user_message))
             
-            # Step 1: Search knowledge base for relevant context - RAG functionality removed
-            knowledge_context = []
+            # Step 1: Try RAG system first
+            from app.services.rag_integration_service import rag_integration_service
             
-            # Step 2: Build conversation context
+            # Build conversation context for RAG
             conversation_context = []
             if conversation_history:
-                # Include last 10 messages for context
+                recent_messages = conversation_history[-5:] if len(conversation_history) > 5 else conversation_history
+                for msg in recent_messages:
+                    role = "user" if msg.sender_type == "user" else "assistant"
+                    conversation_context.append({
+                        "role": role,
+                        "content": msg.content
+                    })
+            
+            # Get user ID from session (assuming it's available)
+            user_id = session_id.split(':')[0] if ':' in session_id else session_id
+            
+            try:
+                # Attempt RAG query
+                rag_response = await rag_integration_service.query_clone_rag(
+                    clone_id=clone_id,
+                    query=user_message,
+                    user_id=user_id,
+                    session_id=session_id,
+                    context={
+                        "conversation_history": conversation_context,
+                        "clone_name": await self._get_clone_name(clone_id)
+                    }
+                )
+                
+                # If RAG was successful, stream the response
+                if rag_response.query_type != "fallback" and rag_response.rag_data:
+                    yield {
+                        "type": "message_chunk",
+                        "content": rag_response.content,
+                        "is_complete": False,
+                        "knowledge_used": rag_response.rag_data.used_memory_layer,
+                        "sources": [
+                            {
+                                "document_name": source.document_name,
+                                "relevance_score": source.relevance_score,
+                                "content_snippet": source.content_snippet[:200] + "..." if len(source.content_snippet) > 200 else source.content_snippet
+                            }
+                            for source in rag_response.rag_data.sources
+                        ]
+                    }
+                    
+                    yield {
+                        "type": "message_complete",
+                        "content": rag_response.content,
+                        "is_complete": True,
+                        "knowledge_used": rag_response.rag_data.used_memory_layer,
+                        "sources": [
+                            {
+                                "document_name": source.document_name,
+                                "relevance_score": source.relevance_score,
+                                "content_snippet": source.content_snippet[:200] + "..." if len(source.content_snippet) > 200 else source.content_snippet
+                            }
+                            for source in rag_response.rag_data.sources
+                        ],
+                        "metadata": {
+                            "confidence_score": rag_response.confidence_score,
+                            "query_type": rag_response.query_type,
+                            "response_time_ms": rag_response.response_time_ms,
+                            "tokens_used": rag_response.tokens_used,
+                            "model_used": "RAG + " + ("LLM" if rag_response.query_type == "enhanced" else "Memory Layer")
+                        }
+                    }
+                    
+                    # Save assistant response to database with RAG metadata
+                    await self.save_message(
+                        session_id=session_id,
+                        sender_type="assistant",
+                        content=rag_response.content,
+                        metadata={
+                            "rag_used": True,
+                            "rag_confidence": rag_response.confidence_score,
+                            "rag_sources": len(rag_response.rag_data.sources),
+                            "query_type": rag_response.query_type,
+                            "response_time_ms": rag_response.response_time_ms,
+                            "tokens_used": rag_response.tokens_used
+                        },
+                        db=db
+                    )
+                    return
+                    
+            except Exception as rag_error:
+                logger.warning("RAG query failed, falling back to standard chat", 
+                             error=str(rag_error), clone_id=clone_id)
+            
+            # Fallback to standard OpenAI chat
+            conversation_context = []
+            if conversation_history:
                 recent_messages = conversation_history[-10:] if len(conversation_history) > 10 else conversation_history
                 for msg in recent_messages:
                     role = "user" if msg.sender_type == "user" else "assistant"
@@ -250,15 +336,15 @@ class ChatService:
                         "content": msg.content
                     })
             
-            # Step 3: Build system prompt with RAG context
-            system_prompt = self._build_rag_system_prompt(knowledge_context, clone_id)
+            # Build system prompt for fallback
+            system_prompt = await self._build_fallback_system_prompt(clone_id)
             
-            # Step 4: Prepare messages for OpenAI
+            # Prepare messages for OpenAI
             messages = [{"role": "system", "content": system_prompt}]
             messages.extend(conversation_context)
             messages.append({"role": "user", "content": user_message})
             
-            # Step 5: Stream response from OpenAI
+            # Stream response from OpenAI
             response_chunks = []
             async for chunk in openai_service.create_chat_completion(
                 messages=messages,
@@ -280,8 +366,8 @@ class ChatService:
                             "type": "message_chunk",
                             "content": content,
                             "is_complete": False,
-                            "knowledge_used": len(knowledge_context) > 0,
-                            "sources": [ctx['source'] for ctx in knowledge_context] if knowledge_context else []
+                            "knowledge_used": False,
+                            "sources": []
                         }
                     
                     if finish_reason == "stop":
@@ -291,10 +377,11 @@ class ChatService:
                             "type": "message_complete",
                             "content": full_response,
                             "is_complete": True,
-                            "knowledge_used": len(knowledge_context) > 0,
-                            "sources": [ctx['source'] for ctx in knowledge_context] if knowledge_context else [],
+                            "knowledge_used": False,
+                            "sources": [],
                             "metadata": {
-                                "knowledge_chunks_used": len(knowledge_context),
+                                "confidence_score": 0.0,
+                                "query_type": "fallback",
                                 "response_length": len(full_response),
                                 "model_used": "gpt-4o-mini"
                             }
@@ -306,7 +393,7 @@ class ChatService:
                             sender_type="assistant",
                             content=full_response,
                             metadata={
-                                "knowledge_context": knowledge_context,
+                                "rag_used": False,
                                 "model_used": "gpt-4o-mini",
                                 "response_time": datetime.utcnow().isoformat()
                             },
@@ -328,7 +415,7 @@ class ChatService:
     
     def _build_rag_system_prompt(self, knowledge_context: List[Dict], clone_id: str) -> str:
         """Build system prompt with RAG context"""
-        base_prompt = f"""You are an AI assistant helping a user by answering questions based on their uploaded documents and general knowledge. 
+        base_prompt = f"""You are an assistant helping a user by answering questions based on their uploaded documents and general knowledge. 
 
 Your clone ID is {clone_id}. Be helpful, accurate, and engaging in your responses."""
         
@@ -426,6 +513,58 @@ Remember to prioritize information from the user's documents when it's relevant 
                 "content": "Sorry, I encountered an error processing your message.",
                 "error": str(e)
             })
+    
+    async def _get_clone_name(self, clone_id: str) -> str:
+        """Get clone name from database"""
+        try:
+            from app.services.rag_integration_service import rag_integration_service
+            supabase = rag_integration_service.supabase
+            
+            result = supabase.table("clones").select("name").eq("id", clone_id).single().execute()
+            return result.data.get("name", "Clone") if result.data else "Clone"
+        except Exception:
+            return "Clone"
+    
+    async def _build_fallback_system_prompt(self, clone_id: str) -> str:
+        """Build system prompt for fallback when RAG is not available"""
+        try:
+            from app.services.rag_integration_service import rag_integration_service
+            supabase = rag_integration_service.supabase
+            
+            # Get clone personality and system prompt
+            result = supabase.table("clones").select(
+                "name, bio, personality_traits, communication_style, system_prompt"
+            ).eq("id", clone_id).single().execute()
+            
+            if result.data:
+                clone_data = result.data
+                name = clone_data.get("name", "Assistant")
+                bio = clone_data.get("bio", "")
+                system_prompt = clone_data.get("system_prompt", "")
+                
+                base_prompt = f"""You are {name}, an assistant."""
+                
+                if bio:
+                    base_prompt += f"\n\nAbout you: {bio}"
+                
+                if system_prompt:
+                    base_prompt += f"\n\nInstructions: {system_prompt}"
+                else:
+                    base_prompt += "\n\nBe helpful, accurate, and engaging in your responses. Answer questions to the best of your knowledge while following personality_traits & communication_style."
+                
+                personality_traits = clone_data.get("personality_traits")
+                if personality_traits and isinstance(personality_traits, dict):
+                    traits_text = ", ".join([f"{k}: {v}" for k, v in personality_traits.items()])
+                    base_prompt += f"\n\nPersonality traits: {traits_text}"
+                
+                return base_prompt
+            
+        except Exception as e:
+            logger.warning("Failed to build personalized system prompt", clone_id=clone_id, error=str(e))
+        
+        # Fallback to generic prompt
+        return """You are a helpful assistant. Be friendly, accurate, and engaging in your responses. 
+        Answer questions to the best of your knowledge while maintaining a professional tone."""
 
 # Global chat service
 chat_service = ChatService()

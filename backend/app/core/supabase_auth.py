@@ -342,7 +342,8 @@ async def get_current_user_id(
     if payload is None:
         logger.debug("Supabase JWT failed, trying internal JWT as fallback")
         try:
-            payload = security_manager.verify_token(token)
+            # Use verify_token without token_type requirement for fallback
+            payload = security_manager.verify_token(token, token_type=None)
             auth_method = "internal_jwt"
             logger.debug("Internal JWT verification successful")
         except HTTPException as e:

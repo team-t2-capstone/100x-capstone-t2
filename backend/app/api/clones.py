@@ -5,9 +5,11 @@ from datetime import datetime
 from typing import List, Optional
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from fastapi.security import HTTPAuthorizationCredentials
 import structlog
+import tempfile
+import os
 
 from app.database import get_supabase, get_service_supabase
 from app.core.supabase_auth import get_current_user_id, security
@@ -101,7 +103,7 @@ async def list_clones(
                 id=clone_data["id"],
                 creator_id=clone_data["creator_id"],
                 name=clone_data["name"],
-                description=clone_data["description"],
+                description=clone_data.get("bio", ""),  # Use bio column instead of description
                 category=clone_data["category"],
                 expertise_areas=clone_data.get("expertise_areas", []),
                 avatar_url=clone_data.get("avatar_url"),
@@ -115,6 +117,7 @@ async def list_clones(
                 total_earnings=float(clone_data.get("total_earnings", 0.0)),
                 is_published=clone_data["is_published"],
                 is_active=clone_data["is_active"],
+                voice_id=clone_data.get("voice_id"),
                 created_at=datetime.fromisoformat(clone_data["created_at"].replace('Z', '+00:00')),
                 updated_at=datetime.fromisoformat(clone_data["updated_at"].replace('Z', '+00:00')),
                 published_at=datetime.fromisoformat(clone_data["published_at"].replace('Z', '+00:00')) if clone_data.get("published_at") else None
@@ -186,7 +189,7 @@ async def get_clone(
             id=clone_data["id"],
             creator_id=clone_data["creator_id"],
             name=clone_data["name"],
-            description=clone_data["description"],
+            description=clone_data.get("bio", ""),  # Use bio column instead of description
             category=clone_data["category"],
             expertise_areas=clone_data.get("expertise_areas", []),
             avatar_url=clone_data.get("avatar_url"),
@@ -200,9 +203,10 @@ async def get_clone(
             total_earnings=float(clone_data.get("total_earnings", 0.0)),
             is_published=clone_data["is_published"],
             is_active=clone_data["is_active"],
+            voice_id=clone_data.get("voice_id"),
             created_at=datetime.fromisoformat(clone_data["created_at"].replace('Z', '+00:00')),
             updated_at=datetime.fromisoformat(clone_data["updated_at"].replace('Z', '+00:00')),
-            published_at=datetime.fromisoformat(clone_data["published_at"].replace('Z', '+00:00')) if clone_data.get("published_at") else None
+            published_at=datetime.fromisoformat(clone_data["published_at"].replace('Z', '+00:00')) if clone_data.get("published_at") and clone_data["published_at"] is not None else None
         )
         
     except HTTPException:
@@ -254,7 +258,7 @@ async def get_my_clones(
                 id=clone_data["id"],
                 creator_id=clone_data["creator_id"],
                 name=clone_data["name"],
-                description=clone_data["description"],
+                description=clone_data.get("bio", ""),  # Use bio column instead of description
                 category=clone_data["category"],
                 expertise_areas=clone_data.get("expertise_areas", []),
                 avatar_url=clone_data.get("avatar_url"),
@@ -268,6 +272,7 @@ async def get_my_clones(
                 total_earnings=float(clone_data.get("total_earnings", 0.0)),
                 is_published=clone_data["is_published"],
                 is_active=clone_data["is_active"],
+                voice_id=clone_data.get("voice_id"),
                 created_at=datetime.fromisoformat(clone_data["created_at"].replace('Z', '+00:00')),
                 updated_at=datetime.fromisoformat(clone_data["updated_at"].replace('Z', '+00:00')),
                 published_at=datetime.fromisoformat(clone_data["published_at"].replace('Z', '+00:00')) if clone_data.get("published_at") else None
@@ -1679,4 +1684,525 @@ async def retry_failed_processing(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retry processing: {str(e)}"
+        )
+
+
+@router.post("/{clone_id}/voice/upload")
+async def upload_voice_sample(
+    clone_id: str,
+    file: UploadFile = File(...),
+    voice_name: Optional[str] = None,
+    description: Optional[str] = None,
+    current_user_id: str = Depends(get_current_user_id)
+):
+    """
+    Upload voice sample for clone voice cloning with ElevenLabs
+    """
+    try:
+        logger.info("Starting voice upload", 
+                   clone_id=clone_id, 
+                   filename=file.filename,
+                   content_type=file.content_type,
+                   user_id=current_user_id)
+        
+        # Get service client for all database operations
+        service_supabase = get_service_supabase()
+        if not service_supabase:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Service client not available"
+            )
+        
+        # Verify clone exists and user has access
+        clone_result = service_supabase.table("clones").select("id, creator_id, name").eq("id", clone_id).execute()
+        if not clone_result.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Clone not found"
+            )
+        
+        clone = clone_result.data[0]
+        if clone["creator_id"] != current_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: Only clone creator can upload voice samples"
+            )
+        
+        # Validate file
+        if not file.filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No filename provided"
+            )
+        
+        # Check file type - audio files only
+        audio_content_types = [
+            "audio/wav", "audio/wave", "audio/x-wav",
+            "audio/mpeg", "audio/mp3", "audio/x-mp3",
+            "audio/mp4", "audio/m4a", "audio/x-m4a",
+            "audio/aac", "audio/ogg", "audio/flac"
+        ]
+        
+        if file.content_type not in audio_content_types:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid file type. Please upload audio files only. Supported formats: WAV, MP3, M4A, AAC, OGG, FLAC"
+            )
+        
+        # Check file size (limit to 25MB for audio)
+        MAX_FILE_SIZE = 25 * 1024 * 1024  # 25MB
+        file_content = await file.read()
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File too large. Maximum size is {MAX_FILE_SIZE / (1024*1024):.1f}MB"
+            )
+        
+        # Reset file pointer
+        await file.seek(0)
+        
+        # Use ElevenLabs service to clone voice
+        from app.services.elevenlabs_service import get_elevenlabs_service
+        
+        elevenlabs_service = get_elevenlabs_service()
+        
+        # Prepare voice name
+        clone_voice_name = voice_name or f"{clone['name']} Voice Clone"
+        voice_description = description or f"AI voice clone for {clone['name']}"
+        
+        logger.info("Cloning voice with ElevenLabs", 
+                   clone_id=clone_id,
+                   voice_name=clone_voice_name,
+                   file_size=len(file_content))
+        
+        # Clone voice using ElevenLabs
+        voice_id = await elevenlabs_service.clone_voice(
+            name=clone_voice_name,
+            audio_files=[file_content],
+            description=voice_description
+        )
+        
+        logger.info("Voice cloned successfully", 
+                   clone_id=clone_id,
+                   voice_id=voice_id)
+        
+        # Update clone with voice_id
+        update_data = {
+            "voice_id": voice_id,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        
+        update_result = service_supabase.table("clones").update(update_data).eq("id", clone_id).execute()
+        
+        if not update_result.data:
+            # Voice was cloned but database update failed - log warning
+            logger.warning("Voice cloned but failed to update database", 
+                          clone_id=clone_id, voice_id=voice_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Voice cloned but failed to update clone record"
+            )
+        
+        logger.info("Clone updated with voice_id", 
+                   clone_id=clone_id,
+                   voice_id=voice_id)
+        
+        return {
+            "clone_id": clone_id,
+            "voice_id": voice_id,
+            "voice_name": clone_voice_name,
+            "filename": file.filename,
+            "file_type": file.content_type,
+            "file_size_bytes": len(file_content),
+            "message": "Voice sample uploaded and cloned successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Voice upload failed", 
+                    clone_id=clone_id, 
+                    filename=file.filename if file else "unknown",
+                    error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to upload voice sample: {str(e)}"
+        )
+
+
+@router.post("/{clone_id}/voice/test")
+async def test_voice_synthesis(
+    clone_id: str,
+    text: str = Query(..., min_length=1, max_length=1000, description="Text to synthesize"),
+    current_user_id: str = Depends(get_current_user_id)
+):
+    """
+    Test voice synthesis for a clone using ElevenLabs text-to-speech
+    """
+    try:
+        logger.info("Testing voice synthesis", 
+                   clone_id=clone_id, 
+                   text_length=len(text),
+                   user_id=current_user_id)
+        
+        # Get service client for database operations
+        service_supabase = get_service_supabase()
+        if not service_supabase:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Service client not available"
+            )
+        
+        # Verify clone exists and user has access
+        clone_result = service_supabase.table("clones").select("id, creator_id, voice_id, name").eq("id", clone_id).execute()
+        if not clone_result.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Clone not found"
+            )
+        
+        clone = clone_result.data[0]
+        if clone["creator_id"] != current_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: Only clone creator can test voice synthesis"
+            )
+        
+        # Check if clone has voice_id
+        voice_id = clone.get("voice_id")
+        if not voice_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Clone does not have a voice. Please upload a voice sample first."
+            )
+        
+        # Use ElevenLabs service to generate speech
+        from app.services.elevenlabs_service import get_elevenlabs_service
+        
+        elevenlabs_service = get_elevenlabs_service()
+        
+        logger.info("Generating speech with ElevenLabs", 
+                   clone_id=clone_id,
+                   voice_id=voice_id,
+                   text_length=len(text))
+        
+        # Generate speech
+        audio_bytes = await elevenlabs_service.generate_speech(
+            text=text,
+            voice_id=voice_id
+        )
+        
+        logger.info("Speech generated successfully", 
+                   clone_id=clone_id,
+                   voice_id=voice_id,
+                   audio_size=len(audio_bytes))
+        
+        # Return audio as response
+        from fastapi.responses import Response
+        
+        return Response(
+            content=audio_bytes,
+            media_type="audio/mpeg",
+            headers={
+                "Content-Disposition": f"attachment; filename=\"{clone['name']}_voice_test.mp3\"",
+                "Content-Length": str(len(audio_bytes))
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Voice synthesis test failed", 
+                    clone_id=clone_id, 
+                    error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to test voice synthesis: {str(e)}"
+        )
+
+
+@router.post("/{clone_id}/documents/upload")
+async def upload_document(
+    clone_id: str,
+    file: UploadFile = File(...),
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    current_user_id: str = Depends(get_current_user_id)
+):
+    """
+    Upload a document to a clone's knowledge base
+    """
+    try:
+        logger.info("Starting document upload", 
+                   clone_id=clone_id, 
+                   filename=file.filename,
+                   content_type=file.content_type,
+                   user_id=current_user_id)
+        
+        # Get service client for all database operations
+        service_supabase = get_service_supabase()
+        if not service_supabase:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Service client not available"
+            )
+        
+        # Verify clone exists and user has access
+        clone_result = service_supabase.table("clones").select("id, creator_id").eq("id", clone_id).execute()
+        if not clone_result.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Clone not found"
+            )
+        
+        clone = clone_result.data[0]
+        if clone["creator_id"] != current_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: Only clone creator can upload documents"
+            )
+        
+        # Validate file
+        if not file.filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No filename provided"
+            )
+        
+        # Check file size (limit to 10MB)
+        MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+        file_content = await file.read()
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File too large. Maximum size is {MAX_FILE_SIZE / (1024*1024):.1f}MB"
+            )
+        
+        # Reset file pointer
+        await file.seek(0)
+        
+        # Generate unique file path in storage
+        file_extension = os.path.splitext(file.filename)[1]
+        unique_filename = f"{uuid4().hex}{file_extension}"
+        storage_path = f"{clone_id}/documents/{unique_filename}"
+        
+        logger.info("Uploading file to storage", 
+                   clone_id=clone_id,
+                   storage_path=storage_path,
+                   file_size=len(file_content))
+        
+        # Upload file to Supabase Storage using service client
+        storage_result = service_supabase.storage.from_("knowledge-documents").upload(
+            path=storage_path,
+            file=file_content,
+            file_options={
+                "content-type": file.content_type or "application/octet-stream"
+            }
+        )
+        
+        if not storage_result:
+            logger.error("Storage upload failed", clone_id=clone_id, filename=file.filename)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to upload file to storage"
+            )
+        
+        # Get public URL for the uploaded file
+        file_url = service_supabase.storage.from_("knowledge-documents").get_public_url(storage_path)
+        
+        # Create knowledge entry in database using service client
+        document_title = title or file.filename
+        document_description = description or f"Uploaded document: {file.filename}"
+        
+        knowledge_data = {
+            "clone_id": clone_id,
+            "title": document_title,
+            "description": document_description,
+            "content_type": "document",
+            "file_name": file.filename,
+            "file_url": file_url,
+            "file_type": file.content_type or "application/octet-stream",
+            "file_size_bytes": len(file_content),
+            "vector_store_status": "pending",
+            "rag_processing_status": "pending",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        
+        logger.info("Creating knowledge entry", clone_id=clone_id, title=document_title)
+        
+        knowledge_result = service_supabase.table("knowledge").insert(knowledge_data).execute()
+        
+        if not knowledge_result.data:
+            # Clean up uploaded file if database insert fails
+            try:
+                service_supabase.storage.from_("knowledge-documents").remove([storage_path])
+            except Exception as cleanup_error:
+                logger.warning("Failed to cleanup storage file after database failure", 
+                             storage_path=storage_path, error=str(cleanup_error))
+            
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create knowledge entry"
+            )
+        
+        knowledge_entry = knowledge_result.data[0]
+        
+        logger.info("Document uploaded successfully", 
+                   clone_id=clone_id,
+                   knowledge_id=knowledge_entry["id"],
+                   filename=file.filename)
+        
+        return {
+            "id": knowledge_entry["id"],
+            "clone_id": clone_id,
+            "title": document_title,
+            "filename": file.filename,
+            "file_url": file_url,
+            "file_type": file.content_type,
+            "file_size_bytes": len(file_content),
+            "rag_processing_status": "pending",
+            "vector_store_status": "pending",
+            "created_at": knowledge_entry["created_at"],
+            "message": "Document uploaded successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Document upload failed", 
+                    clone_id=clone_id, 
+                    filename=file.filename if file else "unknown",
+                    error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to upload document: {str(e)}"
+        )
+
+
+@router.delete("/{clone_id}/documents/{document_id}")
+async def delete_document(
+    clone_id: str,
+    document_id: str,
+    current_user_id: str = Depends(get_current_user_id)
+):
+    """
+    Delete a document from a clone's knowledge base and clean up all associated resources
+    """
+    try:
+        logger.info("Starting document deletion", 
+                   clone_id=clone_id, 
+                   document_id=document_id,
+                   user_id=current_user_id)
+        
+        # Get service client for all database operations
+        service_supabase = get_service_supabase()
+        if not service_supabase:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Service client not available"
+            )
+        
+        # Verify clone exists and user has access
+        clone_result = service_supabase.table("clones").select("id, creator_id").eq("id", clone_id).execute()
+        if not clone_result.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Clone not found"
+            )
+        
+        clone = clone_result.data[0]
+        if clone["creator_id"] != current_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: Only clone creator can delete documents"
+            )
+        
+        # Get document information
+        knowledge_result = service_supabase.table("knowledge").select("*").eq("id", document_id).eq("clone_id", clone_id).execute()
+        if not knowledge_result.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found"
+            )
+        
+        document = knowledge_result.data[0]
+        
+        # 1. Delete file from storage if it exists
+        if document.get("file_url"):
+            try:
+                # Extract storage path from file_url
+                storage_path = document["file_url"].replace(f"{service_supabase.url}/storage/v1/object/public/knowledge-documents/", "")
+                if storage_path:
+                    cleanup_response = service_supabase.storage.from_("knowledge-documents").remove([storage_path])
+                    logger.info("File deleted from storage", path=storage_path, response=cleanup_response)
+            except Exception as storage_error:
+                logger.warning("Failed to delete file from storage", error=str(storage_error), path=storage_path)
+        
+        # 2. Delete OpenAI resources (vector store and assistants) if they exist
+        if document.get("openai_vector_store_id") or document.get("openai_assistant_id"):
+            try:
+                from app.services.rag_client import RAGClient
+                rag_client = RAGClient()
+                
+                # Delete vector store
+                if document.get("openai_vector_store_id"):
+                    try:
+                        await rag_client.delete_vector_store(document["openai_vector_store_id"])
+                        logger.info("Vector store deleted", vector_store_id=document["openai_vector_store_id"])
+                    except Exception as vs_error:
+                        logger.warning("Failed to delete vector store", error=str(vs_error), vector_store_id=document["openai_vector_store_id"])
+                
+                # Delete assistant
+                if document.get("openai_assistant_id"):
+                    try:
+                        await rag_client.delete_assistant(document["openai_assistant_id"])
+                        logger.info("Assistant deleted", assistant_id=document["openai_assistant_id"])
+                    except Exception as assistant_error:
+                        logger.warning("Failed to delete assistant", error=str(assistant_error), assistant_id=document["openai_assistant_id"])
+                        
+            except Exception as rag_error:
+                logger.warning("Failed to delete RAG resources", error=str(rag_error))
+        
+        # 3. Delete any related documents table entries (for RAG system)
+        try:
+            from app.services.rag_core_service import get_rag_supabase
+            rag_supabase = get_rag_supabase()
+            if rag_supabase:
+                # Delete from documents table where the name matches
+                delete_result = rag_supabase.table("documents").delete().eq("name", document.get("title", "")).execute()
+                logger.info("Related documents deleted from RAG system", count=len(delete_result.data))
+        except Exception as rag_db_error:
+            logger.warning("Failed to delete from RAG documents table", error=str(rag_db_error))
+        
+        # 4. Delete from knowledge table (main record)
+        delete_result = service_supabase.table("knowledge").delete().eq("id", document_id).execute()
+        if not delete_result.data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to delete document record"
+            )
+        
+        logger.info("Document deleted successfully", 
+                   clone_id=clone_id,
+                   document_id=document_id,
+                   title=document.get("title", "Unknown"))
+        
+        return {
+            "id": document_id,
+            "clone_id": clone_id,
+            "title": document.get("title", "Unknown"),
+            "message": "Document and all associated resources deleted successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Document deletion failed", 
+                    clone_id=clone_id, 
+                    document_id=document_id,
+                    error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete document: {str(e)}"
         )

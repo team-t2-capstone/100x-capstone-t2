@@ -22,6 +22,9 @@ import { setupStorageBuckets, checkStorageBuckets } from '@/lib/setup-storage';
 import { toast } from '@/components/ui/use-toast';
 // Removed: EnhancedProcessingMonitor import (RAG functionality removed)
 import { EnhancedDocumentUpload } from '@/components/document-upload/enhanced-document-upload';
+import { MemoryLayerControl } from '@/components/wizard/memory-layer-control';
+import useRAG from '@/hooks/use-rag';
+import { VoiceTraining } from '@/components/voice-training';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -55,9 +58,31 @@ import {
   Cpu,
   MoreHorizontal,
   RefreshCw,
+  Book,
+  ExternalLink,
+  Star,
+  Brain,
+  Shield,
 } from "lucide-react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
+import { RAGSource } from '@/lib/rag-api-client';
+
+// Enhanced message interface with RAG support
+interface TestMessage {
+  id: string;
+  content: string;
+  sender: "user" | "clone";
+  timestamp: Date;
+  audioUrl?: string; // URL for voice responses
+  ragData?: {
+    sources: RAGSource[];
+    confidenceScore: number;
+    usedMemoryLayer: boolean;
+    usedLLMFallback: boolean;
+    responseTime: number;
+  };
+}
 
 const expertTypes = {
   medical: { color: "bg-emerald-500", icon: Stethoscope, name: "Health & Wellness", theme: "emerald" },
@@ -70,13 +95,23 @@ const expertTypes = {
   other: { color: "bg-slate-600", icon: MoreHorizontal, name: "Other", theme: "slate" },
 }
 
-const steps = [
+// Voice ID is now managed through ElevenLabs API and stored in database
+
+// Dynamic steps function to include RAG status
+const getSteps = (ragStatus?: string, hasDocuments?: boolean) => [
   { id: 1, title: "Basic Information", description: "Profile and credentials" },
   { id: 2, title: "Q&A Training", description: "Train with questions" },
   { id: 3, title: "Knowledge Transfer", description: "Upload your expertise" },
   { id: 4, title: "Personality & Style", description: "Define communication style" },
   { id: 5, title: "Media Training", description: "Voice and video setup" },
-  { id: 6, title: "Testing & Preview", description: "Test your clone" },
+  { 
+    id: 6, 
+    title: "Testing & Preview", 
+    description: ragStatus === 'ready' ? "Test enhanced clone" : 
+                 ragStatus === 'initializing' ? "Test clone (Memory initializing)" :
+                 hasDocuments ? "Test clone + enable Memory Layer" :
+                 "Test your clone"
+  },
   { id: 7, title: "Pricing & Launch", description: "Set rates and publish" },
 ]
 
@@ -127,7 +162,14 @@ function CloneWizardContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { user } = useAuth()
-  const [currentStep, setCurrentStep] = useState(1)
+  
+  // Single Supabase client instance to avoid authentication issues
+  const supabase = createClient()
+  
+  const [currentStep, setCurrentStep] = useState(() => {
+    const stepParam = searchParams.get('step')
+    return stepParam ? parseInt(stepParam, 10) : 1
+  })
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [createdCloneId, setCreatedCloneId] = useState<string | null>(null)
@@ -143,6 +185,30 @@ function CloneWizardContent() {
   const [processedDocuments, setProcessedDocuments] = useState<Set<string>>(new Set())
   const [hasTriggeredProcessing, setHasTriggeredProcessing] = useState(false)
   const [lastProcessedCloneId, setLastProcessedCloneId] = useState<string | null>(null)
+
+  // Add error handling for unhandled promise rejections
+  useEffect(() => {
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      console.error('Wizard page - Unhandled promise rejection:', event.reason);
+      
+      // Prevent default browser behavior
+      event.preventDefault();
+      
+      // Show user-friendly error message
+      const errorMessage = event.reason?.message || 'An unexpected error occurred';
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    };
+
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    
+    return () => {
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
+  }, []);
   const [formData, setFormData] = useState({
     // Step 1: Basic Information
     name: "",
@@ -180,6 +246,7 @@ function CloneWizardContent() {
     videoSample: null as File | null,
     enableAudio: false,
     enableVideo: false,
+    voiceId: null as string | null,
 
     // Step 6: Testing & Preview
     testPrompt: "",
@@ -218,7 +285,7 @@ function CloneWizardContent() {
     try {
       setIsLoading(true)
       setCreatedCloneId(cloneId)
-      const supabase = createClient()
+      // Using consolidated supabase client
       
       const { data: clone, error } = await supabase
         .from('clones')
@@ -295,8 +362,9 @@ function CloneWizardContent() {
           // Step 5: Media Training
           audioSample: null,
           videoSample: null,
-          enableAudio: false,
+          enableAudio: !!clone.voice_id, // Enable audio if voice_id exists
           enableVideo: false,
+          voiceId: clone.voice_id || null, // Load voice_id from database
 
           // Step 6: Testing & Preview
           testPrompt: "",
@@ -313,7 +381,7 @@ function CloneWizardContent() {
             voice: { min: Math.floor((clone.base_price || 25) * 1.5), max: Math.floor((clone.base_price || 25) * 1.5) },
             video: { min: Math.floor((clone.base_price || 25) * 2), max: Math.floor((clone.base_price || 25) * 2) },
           },
-          isPublished: clone.is_published || false,
+          status: clone.is_active ? "published" : "draft",
         })
         
         // Set knowledge processing status if we have existing knowledge
@@ -356,14 +424,17 @@ function CloneWizardContent() {
   const [testingMode, setTestingMode] = useState<'text' | 'audio' | 'video'>('text')
   const [isRecording, setIsRecording] = useState(false)
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null)
-  const [testMessages, setTestMessages] = useState([
+  const [testMessages, setTestMessages] = useState<TestMessage[]>([
     {
       id: "1",
       content: "Hello! I'm your AI clone. I'm ready to help with your questions. What would you like to discuss?",
-      sender: "clone" as "user" | "clone",
+      sender: "clone",
       timestamp: new Date(),
     },
   ])
+
+  // Initialize RAG hook for enhanced chat functionality
+  const ragHook = useRAG(createdCloneId || '');
 
   // Update greeting message when expertise changes
   useEffect(() => {
@@ -397,6 +468,17 @@ function CloneWizardContent() {
       }
     }
   }, [currentStep, hasTriggeredProcessing])
+
+  // Cleanup audio URLs when messages change to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      testMessages.forEach(message => {
+        if (message.audioUrl) {
+          URL.revokeObjectURL(message.audioUrl);
+        }
+      });
+    };
+  }, [testMessages])
   
   // Prevent duplicate processing when clone ID changes
   useEffect(() => {
@@ -581,7 +663,7 @@ INSTRUCTIONS:
   // Test clone with OpenAI API or RAG
   const testCloneWithAI = async (userMessage: string) => {
     try {
-      const supabase = createClient()
+      // Using consolidated supabase client
       // Check if we should use RAG or fallback to basic OpenAI
       if (createdCloneId && knowledgeProcessingStatus === 'completed' && (formData.documents.length > 0 || formData.links.length > 0)) {
         console.log('Using RAG-powered testing for clone:', createdCloneId)
@@ -654,7 +736,8 @@ INSTRUCTIONS:
           conversationHistory: testMessages.filter(msg => msg.sender !== 'clone' || msg.id === '1').map(msg => ({
             role: msg.sender === 'user' ? 'user' : 'assistant',
             content: msg.content
-          }))
+          })),
+          cloneId: createdCloneId || null // Add cloneId for RAG integration
         })
       })
 
@@ -691,7 +774,7 @@ INSTRUCTIONS:
 
   // Enhanced clone verification with retry logic
   const verifyCloneExists = async (cloneId: string, maxAttempts: number = 5): Promise<boolean> => {
-    const supabase = createClient()
+    // Using consolidated supabase client
     let verifyAttempts = 0;
     
     while (verifyAttempts < maxAttempts) {
@@ -730,7 +813,7 @@ INSTRUCTIONS:
   const retryKnowledgeProcessing = async (cloneId: string) => {
     if (!cloneId) return
     
-    const supabase = createClient()
+    // Using consolidated supabase client
     setIsProcessingKnowledge(true)
     setKnowledgeProcessingStatus('processing')
     setRetryCount(prev => prev + 1)
@@ -849,7 +932,7 @@ INSTRUCTIONS:
     }
 
     try {
-      const supabase = createClient()
+      // Using consolidated supabase client
       setIsProcessingKnowledge(true)
       setKnowledgeProcessingStatus('processing')
       setRetryCount(0) // Reset retry count when starting fresh processing
@@ -866,8 +949,13 @@ INSTRUCTIONS:
       }
 
       // Ensure clone exists before starting processing
-      const cloneExists = await ensureCloneExists(cloneId)
-      if (!cloneExists) {
+      const { data: cloneData, error: cloneError } = await supabase
+        .from('clones')
+        .select('id')
+        .eq('id', cloneId)
+        .single()
+      
+      if (cloneError || !cloneData) {
         throw new Error(`Clone not found or not accessible: ${cloneId}. Please refresh the page and try again.`)
       }
 
@@ -877,16 +965,8 @@ INSTRUCTIONS:
         throw new Error('Required database tables are missing. Please contact support to run migrations.')
       }
 
-      // Ensure domain exists for the clone's category
+      // Note: Domain tracking removed as domains table doesn't exist in current schema
       const cloneDomain = formData.expertise === 'other' ? formData.customDomain : formData.expertise
-      const { error: domainError } = await supabase.from('domains').upsert({
-        domain_name: cloneDomain,
-        expert_names: []
-      }, { onConflict: 'domain_name' })
-
-      if (domainError) {
-        console.warn('Failed to create/update domain:', domainError)
-      }
 
       // Prepare document URLs by uploading files first
       const processedDocuments: Array<{name: string; url: string; type: string}> = []
@@ -911,56 +991,19 @@ INSTRUCTIONS:
         }
         
         try {
-          // Upload document to Supabase Storage first
-          const fileUrl = await uploadFile(doc, 'knowledge-documents', 'clone-documents')
-          if (fileUrl) {
-            // Store document metadata in knowledge table
-            const { error: knowledgeError } = await supabase.from('knowledge').insert({
-              clone_id: cloneId,
-              title: doc.name,
-              description: `Uploaded document: ${doc.name}`,
-              content_type: 'document',
-              file_name: doc.name,
-              file_url: fileUrl,
-              file_type: doc.type,
-              file_size_bytes: doc.size,
-              content_preview: '', // Could extract first 500 chars if needed
-              tags: ['training_material'],
-              vector_store_status: 'pending' // Will be processed by OpenAI later
-            })
-
-            if (knowledgeError) {
-              console.error('Failed to store document in knowledge table:', knowledgeError)
-            }
-
-            // Also store in documents table for RAG processing using upsert
-            const { error: docError } = await supabase.from('documents').upsert({
-              name: doc.name,
-              document_link: fileUrl,
-              created_by: user?.id,
-              domain: cloneDomain,
-              included_in_default: false,
-              client_name: formData.name // Use clone name as client name
-            }, {
-              onConflict: 'name',
-              ignoreDuplicates: false
-            })
-
-            if (docError) {
-              console.error('Failed to store document in documents table:', docError)
-            } else {
-              console.log(`Document ${doc.name} stored in documents table successfully`)
-            }
-
+          // Upload document using backend API (with service key)
+          const uploadResult = await uploadDocumentToBackend(cloneId, doc)
+          if (uploadResult) {
+            console.log(`Document ${doc.name} uploaded successfully:`, uploadResult)
+            
             processedDocuments.push({
               name: doc.name,
-              url: fileUrl,
+              url: uploadResult.file_url,
               type: 'document'
             })
-            console.log(`Document ${doc.name} uploaded successfully:`, fileUrl)
             
             // Track processed document to prevent duplicates
-            setProcessedDocuments(prev => new Set([...prev, doc.name]))
+            setProcessedDocuments(prev => new Set([...Array.from(prev), doc.name]))
           }
           setProcessingProgress(prev => ({ ...prev, completed: prev.completed + 1 }))
         } catch (error) {
@@ -1033,7 +1076,7 @@ INSTRUCTIONS:
           })
           
           // Track processed link to prevent duplicates
-          setProcessedDocuments(prev => new Set([...prev, link]))
+          setProcessedDocuments(prev => new Set([...Array.from(prev), link]))
         } catch (error) {
           console.error(`Failed to process link ${link}:`, error)
         }
@@ -1043,7 +1086,7 @@ INSTRUCTIONS:
       // Create or update expert for this clone
       if (processedDocuments.length > 0 || processedLinks.length > 0) {
         const expertName = formData.name || 'Unnamed Expert'
-        const expertContext = `Expert specializing in ${cloneDomain}. ${formData.bio || ''}\n\nExpertise areas: ${formData.expertiseAreas?.join(', ') || 'General'}\n\nPersonality: ${JSON.stringify(formData.personality, null, 2)}`
+        const expertContext = `Expert specializing in ${cloneDomain}. ${formData.bio || ''}\n\nExpertise areas: ${formData.expertise || 'General'}\n\nPersonality: ${JSON.stringify(formData.personality, null, 2)}`
 
         const { error: expertError } = await supabase.from('experts').upsert({
           name: expertName,
@@ -1056,24 +1099,7 @@ INSTRUCTIONS:
         } else {
           console.log('Expert created/updated successfully:', expertName)
           
-          // Update domain to include this expert
-          const { data: domainData } = await supabase.from('domains')
-            .select('expert_names')
-            .eq('domain_name', cloneDomain)
-            .single()
-
-          if (domainData) {
-            const currentExperts = domainData.expert_names || []
-            if (!currentExperts.includes(expertName)) {
-              const { error: updateError } = await supabase.from('domains')
-                .update({ expert_names: [...currentExperts, expertName] })
-                .eq('domain_name', cloneDomain)
-
-              if (updateError) {
-                console.error('Failed to update domain experts:', updateError)
-              }
-            }
-          }
+          // Note: Domain expert tracking removed as domains table doesn't exist
         }
       }
 
@@ -1339,7 +1365,7 @@ INSTRUCTIONS:
   // Save Q&A responses to the database
   const saveQAResponses = async (cloneId: string, qaResponses: Record<string, string>) => {
     try {
-      const supabase = createClient()
+      // Using consolidated supabase client
       console.log('Saving Q&A responses for clone:', cloneId)
       console.log('Q&A data:', qaResponses)
       
@@ -1369,7 +1395,7 @@ INSTRUCTIONS:
   // Load Q&A responses from the database
   const loadQAResponses = async (cloneId: string): Promise<Record<string, string>> => {
     try {
-      const supabase = createClient()
+      // Using consolidated supabase client
       console.log('Loading Q&A responses for clone:', cloneId)
       
       const { data, error } = await supabase
@@ -1399,7 +1425,7 @@ INSTRUCTIONS:
   // Load existing knowledge documents and links for the clone
   const loadKnowledgeData = async (cloneId: string) => {
     try {
-      const supabase = createClient()
+      // Using consolidated supabase client
       console.log('Loading knowledge data for clone:', cloneId)
       
       const { data: knowledgeData, error } = await supabase
@@ -1502,7 +1528,7 @@ INSTRUCTIONS:
   // Delete existing knowledge item (document or link)
   const deleteKnowledgeItem = async (itemId: string, itemType: 'document' | 'link') => {
     try {
-      const supabase = createClient()
+      // Using consolidated supabase client
       console.log(`Deleting ${itemType} with ID:`, itemId)
       
       const { error } = await supabase
@@ -1553,7 +1579,7 @@ INSTRUCTIONS:
   // Helper function to check if required tables exist and create them if missing
   const ensureTablesExist = async () => {
     try {
-      const supabase = createClient()
+      // Using consolidated supabase client
       console.log('Checking if required database tables exist...')
       
       // Check if documents table exists by attempting a simple query
@@ -1562,11 +1588,7 @@ INSTRUCTIONS:
         .select('id')
         .limit(1)
       
-      // Check if domains table exists
-      const { data: domainsTest, error: domainsError } = await supabase
-        .from('domains')
-        .select('id')
-        .limit(1)
+      // Note: domains table check removed as it doesn't exist in current schema
       
       // Check if experts table exists
       const { data: expertsTest, error: expertsError } = await supabase
@@ -1606,10 +1628,47 @@ INSTRUCTIONS:
     }
   }
 
+  // Upload document to backend API (uses service key)
+  const uploadDocumentToBackend = async (cloneId: string, file: File): Promise<any> => {
+    try {
+      // Using consolidated supabase client
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+      if (sessionError || !session) {
+        throw new Error('Authentication required')
+      }
+
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('title', file.name)
+      formData.append('description', `Uploaded document: ${file.name}`)
+
+      const response = await fetch(`http://127.0.0.1:8000/api/v1/clones/${cloneId}/documents/upload`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: formData
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Backend upload failed:', response.status, errorText)
+        throw new Error(`Upload failed: ${response.status} - ${errorText}`)
+      }
+
+      const result = await response.json()
+      console.log('Backend upload successful:', result)
+      return result
+    } catch (error) {
+      console.error('Document upload to backend failed:', error)
+      throw error
+    }
+  }
+
   // Upload file to Supabase Storage
   const uploadFile = async (file: File, bucket: string, folder: string): Promise<string | null> => {
     try {
-      const supabase = createClient()
+      // Using consolidated supabase client
       // Ensure user is authenticated before upload
       const { data: { session }, error: sessionError } = await supabase.auth.getSession()
       if (sessionError) {
@@ -1657,6 +1716,25 @@ INSTRUCTIONS:
         fileType: file.type
       })
 
+      // Verify authentication before upload
+      if (!session?.user?.id) {
+        console.error('No valid session found for upload')
+        throw new Error('Authentication required for file upload')
+      }
+
+      // Check if bucket exists before upload
+      const { data: bucketList, error: bucketError } = await supabase.storage.listBuckets()
+      if (bucketError) {
+        console.error('Failed to list buckets:', bucketError)
+      } else {
+        const bucketExists = bucketList?.some(b => b.name === bucket)
+        console.log(`Bucket "${bucket}" exists:`, bucketExists)
+        if (!bucketExists) {
+          console.log('Attempting to create missing bucket...')
+          await setupStorageBuckets()
+        }
+      }
+
       // Upload with upsert to handle overwriting
       const { data, error } = await supabase.storage
         .from(bucket)
@@ -1664,15 +1742,20 @@ INSTRUCTIONS:
 
       if (error) {
         console.error('Upload error details:', {
-          error: error.message,
-          errorCode: error.statusCode,
+          error: error.message || 'Unknown error',
+          errorCode: error.statusCode || 'No status code',
+          errorDetails: JSON.stringify(error),
+          errorType: typeof error,
+          errorKeys: Object.keys(error),
           bucket,
           filePath,
-          hasAuth: !!session?.user?.id
+          hasAuth: !!session?.user?.id,
+          hasSession: !!session,
+          hasUser: !!user
         })
         
-        // If bucket still doesn't exist, try to create it once more
-        if (error.message.includes('Bucket not found')) {
+        // Handle specific error cases
+        if (error.message && error.message.includes('Bucket not found')) {
           console.log('Bucket not found, attempting to create it...')
           await setupStorageBuckets()
           
@@ -1683,10 +1766,16 @@ INSTRUCTIONS:
           
           if (retryError) {
             console.error('Retry upload error:', retryError)
-            return null
+            throw new Error(`Upload failed after bucket creation: ${retryError.message || 'Unknown error'}`)
           }
+          
+          // Success on retry
+          const { data: retryUrlData } = supabase.storage.from(bucket).getPublicUrl(filePath)
+          return retryUrlData.publicUrl
         } else {
-          return null
+          // Handle empty error objects or other error types
+          const errorMessage = error.message || error.toString() || 'Unknown upload error occurred'
+          throw new Error(`Upload failed: ${errorMessage}`)
         }
       }
 
@@ -1707,8 +1796,16 @@ INSTRUCTIONS:
       
       return cleanUrl
     } catch (error) {
-      console.error('Upload error:', error)
-      return null
+      console.error('Upload error caught:', {
+        error,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        errorType: typeof error,
+        errorString: error?.toString(),
+        stack: error instanceof Error ? error.stack : undefined
+      })
+      
+      // Re-throw the error so it can be handled by the calling function
+      throw error instanceof Error ? error : new Error(`Upload failed: ${error}`)
     }
   }
 
@@ -1773,6 +1870,11 @@ INSTRUCTIONS:
         return
       }
     
+    const hasKnowledgeContent = (formData.documents && formData.documents.length > 0) || 
+                               (formData.links && formData.links.length > 0) ||
+                               (formData.existingDocuments && formData.existingDocuments.length > 0) ||
+                               (formData.existingLinks && formData.existingLinks.length > 0);
+    const steps = getSteps(ragHook.status, hasKnowledgeContent);
     if (currentStep < steps.length) {
       console.log('💾 DEBUG: Before saveProgress:', {
         documentsCount: formData.documents.length,
@@ -1895,7 +1997,7 @@ INSTRUCTIONS:
 
   const saveProgress = async (): Promise<string | null> => {
     try {
-      const supabase = createClient()
+      // Using consolidated supabase client
       setIsSubmitting(true)
       
       // Check if we already have a clone ID and if it exists in the database
@@ -1921,15 +2023,18 @@ INSTRUCTIONS:
       let avatarUrl = null
       if (formData.photo) {
         console.log('Uploading avatar photo...')
-        avatarUrl = await uploadFile(formData.photo, 'clone-avatars', 'avatars')
-        if (!avatarUrl) {
+        try {
+          avatarUrl = await uploadFile(formData.photo, 'clone-avatars', 'avatars')
+          console.log('Avatar uploaded successfully to:', avatarUrl)
+        } catch (uploadError) {
+          console.error('Avatar upload failed:', uploadError)
           toast({
             title: "Photo upload failed",
-            description: "Continuing without photo upload",
+            description: uploadError instanceof Error ? uploadError.message : "Continuing without photo upload",
             variant: "destructive",
           })
-        } else {
-          console.log('Avatar uploaded successfully to:', avatarUrl)
+          // Continue without photo upload
+          avatarUrl = null
         }
       }
       
@@ -2134,7 +2239,7 @@ INSTRUCTIONS:
 
   const handleFinalSubmit = async () => {
     try {
-      const supabase = createClient()
+      // Using consolidated supabase client
       setIsSubmitting(true)
       
       if (!createdCloneId) {
@@ -2145,15 +2250,18 @@ INSTRUCTIONS:
       // Process Q&A responses into knowledge entries
       const qaPromises = Object.entries(formData.qaResponses)
         .filter(([_, answer]) => answer && answer.trim())
-        .map(([question, answer]) =>
-          createKnowledgeEntry({
+        .map(async ([question, answer]) => {
+          const { error } = await supabase.from('knowledge').insert({
             clone_id: createdCloneId!,
             question,
             answer,
             category: 'qa_training',
             confidence: 0.9,
           })
-        )
+          if (error) {
+            console.error('Failed to create Q&A knowledge entry:', error)
+          }
+        })
 
       await Promise.all(qaPromises)
 
@@ -2257,10 +2365,10 @@ INSTRUCTIONS:
     // In a real implementation, you'd send the audio to a speech-to-text service
     const transcriptText = "Audio message received - processing..."
     
-    const userMessage = {
+    const userMessage: TestMessage = {
       id: Date.now().toString(),
       content: `🎤 ${transcriptText}`,
-      sender: "user" as "user" | "clone",
+      sender: "user",
       timestamp: new Date(),
     }
 
@@ -2272,27 +2380,75 @@ INSTRUCTIONS:
 
   const processTextMessage = async (text: string) => {
     // Show typing indicator
-    const typingMessage = {
+    const typingMessage: TestMessage = {
       id: "typing",
       content: "Typing...",
-      sender: "clone" as "user" | "clone",
+      sender: "clone",
       timestamp: new Date(),
     }
     
     setTestMessages(prev => [...prev, typingMessage])
 
     try {
-      // Get AI response using OpenAI
-      const aiResponse = await testCloneWithAI(text)
+      let aiResponse = "";
+      let ragData = undefined;
+
+      // Try RAG API client first if available and ready
+      if (ragHook.isReady && ragHook.status === 'ready' && createdCloneId) {
+        try {
+          const ragResponse = await ragHook.queryRAG(text);
+          aiResponse = ragResponse.content;
+          
+          if (ragResponse.rag_data) {
+            ragData = {
+              sources: ragResponse.rag_data.sources,
+              confidenceScore: ragResponse.rag_data.confidence_score,
+              usedMemoryLayer: ragResponse.rag_data.used_memory_layer,
+              usedLLMFallback: ragResponse.rag_data.used_llm_fallback,
+              responseTime: ragResponse.rag_data.response_time_ms,
+            };
+          }
+        } catch (ragError) {
+          console.log('RAG query failed, falling back to standard AI:', ragError);
+          // Fall through to standard AI
+        }
+      }
+
+      // Fallback to existing testCloneWithAI if RAG not available or failed
+      if (!aiResponse) {
+        const standardResponse = await testCloneWithAI(text);
+        
+        // Check if response includes existing RAG citation marker
+        if (standardResponse && standardResponse.includes('📚 *Based on your uploaded knowledge materials*')) {
+          const [responseText] = standardResponse.split('\n\n📚');
+          aiResponse = responseText;
+          
+          // Create RAG data from existing implementation
+          ragData = {
+            sources: [{
+              document_name: "Your Knowledge Base",
+              content_snippet: "Information from uploaded documents",
+              relevance_score: 0.85,
+            }],
+            confidenceScore: 0.85,
+            usedMemoryLayer: true,
+            usedLLMFallback: false,
+            responseTime: 1200,
+          };
+        } else {
+          aiResponse = standardResponse;
+        }
+      }
       
       // Remove typing indicator and add real response
       setTestMessages(prev => {
         const withoutTyping = prev.filter(msg => msg.id !== "typing")
-        const cloneMessage = {
+        const cloneMessage: TestMessage = {
           id: (Date.now() + 1).toString(),
           content: aiResponse || "I'm sorry, I'm having trouble processing that right now. Could you try rephrasing your question?",
-          sender: "clone" as "user" | "clone",
+          sender: "clone",
           timestamp: new Date(),
+          ragData,
         }
         return [...withoutTyping, cloneMessage]
       })
@@ -2302,10 +2458,10 @@ INSTRUCTIONS:
       // Remove typing indicator and show error message
       setTestMessages(prev => {
         const withoutTyping = prev.filter(msg => msg.id !== "typing")
-        const errorMessage = {
+        const errorMessage: TestMessage = {
           id: (Date.now() + 1).toString(),
           content: "I apologize, but I'm experiencing some technical difficulties. Please try again in a moment.",
-          sender: "clone" as "user" | "clone",
+          sender: "clone",
           timestamp: new Date(),
         }
         return [...withoutTyping, errorMessage]
@@ -2316,17 +2472,240 @@ INSTRUCTIONS:
   const handleTestMessage = async () => {
     if (!testInput.trim()) return
 
-    const userMessage = {
+    const userMessage: TestMessage = {
       id: Date.now().toString(),
       content: testInput,
-      sender: "user" as "user" | "clone",
+      sender: "user",
       timestamp: new Date(),
     }
 
     setTestMessages(prev => [...prev, userMessage])
     setTestInput("")
 
-    await processTextMessage(userMessage.content)
+    if (testingMode === 'audio') {
+      await processVoiceMessage(userMessage.content)
+    } else {
+      await processTextMessage(userMessage.content)
+    }
+  }
+
+  const processVoiceMessage = async (text: string) => {
+    // Show typing indicator
+    const typingMessage: TestMessage = {
+      id: "typing",
+      content: "Generating voice response...",
+      sender: "clone",
+      timestamp: new Date(),
+    }
+    
+    setTestMessages(prev => [...prev, typingMessage])
+
+    try {
+      let aiResponse = "";
+      let ragData = undefined;
+
+      // Get text response using same logic as processTextMessage
+      if (ragHook.isReady && ragHook.status === 'ready' && createdCloneId) {
+        try {
+          const ragResponse = await ragHook.queryRAG(text);
+          aiResponse = ragResponse.content;
+          
+          if (ragResponse.rag_data) {
+            ragData = {
+              sources: ragResponse.rag_data.sources,
+              confidenceScore: ragResponse.rag_data.confidence_score,
+              usedMemoryLayer: ragResponse.rag_data.used_memory_layer,
+              usedLLMFallback: ragResponse.rag_data.used_llm_fallback,
+              responseTime: ragResponse.rag_data.response_time_ms,
+            };
+          }
+        } catch (ragError) {
+          console.log('RAG query failed, falling back to standard AI:', ragError);
+        }
+      }
+
+      // Fallback to existing testCloneWithAI if RAG not available or failed
+      if (!aiResponse) {
+        const standardResponse = await testCloneWithAI(text);
+        
+        if (standardResponse && standardResponse.includes('📚 *Based on your uploaded knowledge materials*')) {
+          const [responseText] = standardResponse.split('\n\n📚');
+          aiResponse = responseText;
+          
+          ragData = {
+            sources: [{
+              document_name: "Your Knowledge Base",
+              content_snippet: "Information from uploaded documents",
+              relevance_score: 0.85,
+            }],
+            confidenceScore: 0.85,
+            usedMemoryLayer: true,
+            usedLLMFallback: false,
+            responseTime: 1200,
+          };
+        } else {
+          aiResponse = standardResponse;
+        }
+      }
+
+      // Generate audio if voice_id is available
+      let audioUrl = null;
+      if (formData.voiceId && aiResponse) {
+        // Check if this looks like a real ElevenLabs voice_id vs a random generated one
+        const isRandomVoiceId = formData.voiceId.startsWith('voice_') && formData.voiceId.includes('_');
+        
+        if (isRandomVoiceId) {
+          console.warn('Voice ID appears to be randomly generated, not from ElevenLabs:', formData.voiceId);
+          // Add a helpful message instead of attempting generation
+          setTestMessages(prev => {
+            const withoutTyping = prev.filter(msg => msg.id !== "typing")
+            const helpMessage: TestMessage = {
+              id: (Date.now() + 1).toString(),
+              content: aiResponse + "\n\n⚠️ Voice response not available - please complete voice training in the Media Training section first.",
+              sender: "clone",
+              timestamp: new Date(),
+              ragData,
+            }
+            return [...withoutTyping, helpMessage]
+          })
+          return; // Skip voice generation
+        }
+
+        console.log('Attempting voice generation with real voice ID:', {
+          voiceId: formData.voiceId,
+          responseLength: aiResponse.length,
+          responsePreview: aiResponse.substring(0, 100)
+        });
+        
+        try {
+          // Get authentication token using the proper auth system
+          let token = getAuthTokens().accessToken;
+          
+          // If no token in cookies, try to get from Supabase session
+          if (!token) {
+            try {
+              const supabase = createClient();
+              const { data: { session } } = await supabase.auth.getSession();
+              if (session?.access_token) {
+                token = session.access_token;
+              }
+            } catch (error) {
+              console.error('Failed to get Supabase session:', error);
+            }
+          }
+
+          // Truncate text if too long (API limit is 500 characters)
+          const truncatedText = aiResponse.length > 500 
+            ? aiResponse.substring(0, 497) + '...'
+            : aiResponse;
+
+          const voiceFormData = new FormData();
+          voiceFormData.append('text', truncatedText);
+          voiceFormData.append('voice_id', formData.voiceId);
+          
+          console.log('Sending voice generation request:', {
+            textLength: truncatedText.length,
+            voiceId: formData.voiceId,
+            hasToken: !!token
+          });
+
+          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/voice/test-voice`, {
+            method: 'POST',
+            body: voiceFormData,
+            headers: {
+              ...(token && { 'Authorization': `Bearer ${token}` })
+            }
+          });
+
+          if (response.ok) {
+            const audioBlob = await response.blob();
+            audioUrl = URL.createObjectURL(audioBlob);
+            console.log('Voice generation successful, audio URL created');
+          } else {
+            // Get detailed error information
+            const errorText = await response.text().catch(() => '');
+            console.error('Voice generation failed:', {
+              status: response.status,
+              statusText: response.statusText,
+              errorBody: errorText,
+              voiceId: formData.voiceId,
+              textLength: truncatedText.length,
+              hasToken: !!token
+            });
+            
+            // Try to parse error details
+            let errorMessage = 'Voice generation failed';
+            try {
+              const errorData = JSON.parse(errorText);
+              console.error('Parsed error:', errorData);
+              
+              if (errorData.detail) {
+                if (errorData.detail.includes('voice_not_found')) {
+                  errorMessage = 'Voice clone not found. Please retrain your voice in the Media Training section.';
+                } else if (errorData.detail.includes('Text cannot be empty')) {
+                  errorMessage = 'No text to convert to speech.';
+                } else if (errorData.detail.includes('Text too long')) {
+                  errorMessage = 'Response text is too long for voice generation.';
+                } else {
+                  errorMessage = errorData.detail;
+                }
+              }
+            } catch {
+              console.error('Could not parse error response');
+              if (response.status === 400) {
+                errorMessage = 'Invalid request to voice service. Please check your voice training.';
+              } else if (response.status === 401) {
+                errorMessage = 'Authentication failed for voice service.';
+              } else if (response.status === 404) {
+                errorMessage = 'Voice not found. Please retrain your voice.';
+              }
+            }
+            
+            // Add user-friendly error message to the chat
+            setTestMessages(prev => {
+              const withoutTyping = prev.filter(msg => msg.id !== "typing")
+              const errorNotification: TestMessage = {
+                id: (Date.now() + 2).toString(),
+                content: `⚠️ ${errorMessage}`,
+                sender: "clone",
+                timestamp: new Date(),
+              }
+              return [...withoutTyping, errorNotification]
+            })
+          }
+        } catch (error) {
+          console.error('Error generating voice:', error);
+        }
+      }
+      
+      // Remove typing indicator and add voice response
+      setTestMessages(prev => {
+        const withoutTyping = prev.filter(msg => msg.id !== "typing")
+        const cloneMessage: TestMessage = {
+          id: (Date.now() + 1).toString(),
+          content: aiResponse || "I'm sorry, I'm having trouble processing that right now. Could you try rephrasing your question?",
+          sender: "clone",
+          timestamp: new Date(),
+          ragData,
+          audioUrl, // Add audio URL to message
+        }
+        return [...withoutTyping, cloneMessage]
+      })
+    } catch (error) {
+      console.error('Error getting AI voice response:', error)
+      
+      // Remove typing indicator and show error message
+      setTestMessages(prev => {
+        const withoutTyping = prev.filter(msg => msg.id !== "typing")
+        const errorMessage: TestMessage = {
+          id: (Date.now() + 1).toString(),
+          content: "I'm having trouble generating a voice response right now. Please try again.",
+          sender: "clone",
+          timestamp: new Date(),
+        }
+        return [...withoutTyping, errorMessage]
+      })
+    }
   }
 
   const renderStepContent = () => {
@@ -2656,9 +3035,23 @@ INSTRUCTIONS:
                         description: `${document.filename || document.file_name || document.title || 'Document'} has been added to your knowledge base`,
                       })
                     }}
+                    onDocumentRemoved={(documentId) => {
+                      // Remove the document from formData
+                      setFormData(prev => ({
+                        ...prev,
+                        existingDocuments: prev.existingDocuments?.filter(doc => doc.id !== documentId) || []
+                      }))
+                      
+                      toast({
+                        title: "Document removed",
+                        description: "Document has been removed from your knowledge base",
+                      })
+                    }}
                     existingDocuments={formData.existingDocuments}
                     maxFileSize={10}
                     allowedExtensions={['.pdf', '.doc', '.docx', '.txt', '.md', '.rtf']}
+                    expertName={formData.name}
+                    domainName={formData.category}
                   />
                 ) : (
                   <Card>
@@ -3099,7 +3492,21 @@ INSTRUCTIONS:
                     size="sm"
                     onClick={() => {
                       console.log('Audio toggle clicked, current state:', formData.enableAudio)
-                      setFormData({...formData, enableAudio: !formData.enableAudio})
+                      const newAudioState = !formData.enableAudio;
+                      
+                      setFormData({
+                        ...formData, 
+                        enableAudio: newAudioState,
+                      });
+                      
+                      if (newAudioState) {
+                        toast({
+                          title: "Audio Training Enabled",
+                          description: formData.voiceId 
+                            ? "Voice responses are now available!" 
+                            : "Please upload an audio sample below to complete voice training",
+                        });
+                      }
                     }}
                   >
                     {formData.enableAudio ? "Enabled" : "Enable"}
@@ -3133,39 +3540,59 @@ INSTRUCTIONS:
               {console.log('Rendering conditional sections - Audio:', formData.enableAudio, 'Video:', formData.enableVideo)}
               {/* Audio Training - Only show if enabled */}
               {formData.enableAudio && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center space-x-2">
-                      <Mic className="h-5 w-5" />
-                      <span>Voice Training</span>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <p className="text-sm text-slate-600 dark:text-slate-300">
-                      Upload a 2-3 minute audio sample to train your clone's voice
-                    </p>
-                    <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-lg p-6 text-center">
-                      <Mic className="h-8 w-8 text-slate-400 mx-auto mb-2" />
-                      <p className="text-sm font-medium mb-2">Record or Upload Audio</p>
-                      <div className="flex space-x-2 justify-center">
-                        <Button variant="outline" size="sm" className="bg-transparent">
-                          Record
-                        </Button>
-                        <Button variant="outline" size="sm" className="bg-transparent">
-                          Upload File
-                        </Button>
-                      </div>
-                    </div>
-                    {formData.audioSample && (
-                      <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                        <div className="flex items-center space-x-2">
-                          <Mic className="h-4 w-4 text-slate-500" />
-                          <span className="text-sm">{formData.audioSample.name}</span>
+                <div className="space-y-6">
+                  <VoiceTraining
+                    cloneId={createdCloneId}
+                    onVoiceCloned={async (voiceId, voiceName) => {
+                      try {
+                        console.log('Voice cloned:', { voiceId, voiceName });
+                        setFormData(prev => ({ 
+                          ...prev, 
+                          voiceId: voiceId,
+                          enableAudio: true // Automatically enable audio when voice is cloned
+                        }));
+                        
+                        // Note: When using clone-specific endpoint, voice_id is automatically saved by the backend
+                        // This callback only needs to update the form state
+                        
+                        toast({
+                          title: "Voice cloned successfully",
+                          description: `${voiceName} is ready for use!`,
+                        });
+                      } catch (error) {
+                        console.error('Error in onVoiceCloned callback:', error);
+                        toast({
+                          title: "Error updating voice data",
+                          description: "Voice was cloned but there was an error updating the form",
+                          variant: "destructive",
+                        });
+                      }
+                    }}
+                    enableTesting={true}
+                    initialVoiceId={formData.voiceId}
+                  />
+                  
+                  {/* Voice ID Display */}
+                  {formData.voiceId && (
+                    <Card>
+                      <CardContent className="pt-6">
+                        <div className="flex items-center justify-between p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                          <div className="flex items-center space-x-2">
+                            <CheckCircle className="h-4 w-4 text-blue-500" />
+                            <div>
+                              <div className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                                Voice Training Active
+                              </div>
+                              <div className="text-xs text-blue-600 dark:text-blue-400">
+                                Voice ID: {formData.voiceId}
+                              </div>
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
+                      </CardContent>
+                    </Card>
+                  )}
+                </div>
               )}
 
               {/* Video Training - Only show if enabled */}
@@ -3183,21 +3610,74 @@ INSTRUCTIONS:
                     </p>
                     <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-lg p-6 text-center">
                       <Video className="h-8 w-8 text-slate-400 mx-auto mb-2" />
-                      <p className="text-sm font-medium mb-2">Record or Upload Video</p>
-                      <div className="flex space-x-2 justify-center">
-                        <Button variant="outline" size="sm" className="bg-transparent">
-                          Record
-                        </Button>
-                        <Button variant="outline" size="sm" className="bg-transparent">
-                          Upload File
-                        </Button>
-                      </div>
+                      <p className="text-sm font-medium mb-2">Upload Video File</p>
+                      <input
+                        type="file"
+                        accept="video/mp4,video/avi,video/mov,video/wmv,video/flv,video/webm"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            // Validate file type
+                            const validTypes = ['video/mp4', 'video/avi', 'video/mov', 'video/wmv', 'video/flv', 'video/webm'];
+                            if (!validTypes.some(type => file.type.includes(type.split('/')[1]))) {
+                              toast({
+                                title: "Invalid file type",
+                                description: "Please upload a valid video file (MP4, AVI, MOV, WMV, FLV, WEBM)",
+                                variant: "destructive",
+                              });
+                              return;
+                            }
+                            
+                            // Validate file size (100MB limit for video)
+                            const maxSize = 100 * 1024 * 1024;
+                            if (file.size > maxSize) {
+                              toast({
+                                title: "File too large",
+                                description: "Video file must be less than 100MB",
+                                variant: "destructive",
+                              });
+                              return;
+                            }
+                            
+                            setFormData(prev => ({ ...prev, videoSample: file }));
+                            toast({
+                              title: "Video file selected",
+                              description: `${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`,
+                            });
+                          }
+                        }}
+                        className="hidden"
+                        id="video-upload"
+                      />
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="bg-transparent"
+                        onClick={() => document.getElementById('video-upload')?.click()}
+                      >
+                        <Upload className="h-4 w-4 mr-2" />
+                        Upload Video File
+                      </Button>
                     </div>
                     {formData.videoSample && (
                       <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-                        <div className="flex items-center space-x-2">
-                          <Video className="h-4 w-4 text-slate-500" />
-                          <span className="text-sm">{formData.videoSample.name}</span>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            <Video className="h-4 w-4 text-slate-500" />
+                            <div>
+                              <div className="text-sm font-medium">{formData.videoSample.name}</div>
+                              <div className="text-xs text-slate-500">
+                                {(formData.videoSample.size / (1024 * 1024)).toFixed(2)} MB
+                              </div>
+                            </div>
+                          </div>
+                          <Button 
+                            variant="ghost" 
+                            size="sm"
+                            onClick={() => setFormData(prev => ({ ...prev, videoSample: null }))}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
                         </div>
                       </div>
                     )}
@@ -3243,26 +3723,81 @@ INSTRUCTIONS:
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Card className="text-center">
                 <CardContent className="pt-6">
-                  <MessageCircle className="h-8 w-8 mx-auto text-blue-600 mb-2" />
+                  <div className="relative">
+                    <MessageCircle className="h-8 w-8 mx-auto text-blue-600 mb-2" />
+                    {ragHook.status === 'ready' && (
+                      <div className="absolute -top-1 -right-1 bg-purple-500 rounded-full p-1">
+                        <Brain className="h-3 w-3 text-white" />
+                      </div>
+                    )}
+                  </div>
                   <h3 className="font-semibold text-sm">Chat Clone</h3>
-                  <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">Text conversations</p>
-                  <div className="mt-2">
+                  <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">
+                    {ragHook.status === 'ready' ? 'Enhanced with Memory Layer' : 'Text conversations'}
+                  </p>
+                  <div className="mt-2 space-y-1">
                     <span className="text-xs px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-full">
                       Ready
                     </span>
+                    {ragHook.status === 'ready' && (
+                      <div className="flex items-center justify-center space-x-1 text-xs text-purple-600 dark:text-purple-400">
+                        <Brain className="h-3 w-3" />
+                        <span>Memory Layer Active</span>
+                      </div>
+                    )}
+                    {ragHook.status === 'initializing' && (
+                      <div className="flex items-center justify-center space-x-1 text-xs text-blue-600 dark:text-blue-400">
+                        <RefreshCw className="h-3 w-3 animate-spin" />
+                        <span>Memory Layer Initializing</span>
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
 
               <Card className="text-center">
                 <CardContent className="pt-6">
-                  <Mic className="h-8 w-8 mx-auto text-slate-400 mb-2" />
+                  <div className="relative">
+                    <Mic className={`h-8 w-8 mx-auto mb-2 ${formData.voiceId ? 'text-blue-600' : 'text-slate-400'}`} />
+                    {formData.voiceId && (
+                      <div className="absolute -top-1 -right-1 bg-green-500 rounded-full p-1">
+                        <CheckCircle className="h-3 w-3 text-white" />
+                      </div>
+                    )}
+                  </div>
                   <h3 className="font-semibold text-sm">Voice Clone</h3>
                   <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">Audio conversations</p>
-                  <div className="mt-2">
-                    <span className="text-xs px-2 py-1 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-full">
-                      {formData.enableAudio ? "Ready" : "Not Enabled"}
-                    </span>
+                  <div className="mt-2 space-y-1">
+                    {(() => {
+                      const hasValidVoiceId = formData.voiceId && !formData.voiceId.startsWith('voice_');
+                      const isRandomVoiceId = formData.voiceId && formData.voiceId.startsWith('voice_');
+                      
+                      return (
+                        <>
+                          <span className={`text-xs px-2 py-1 rounded-full ${
+                            hasValidVoiceId 
+                              ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+                              : formData.enableAudio 
+                              ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                          }`}>
+                            {hasValidVoiceId ? "Ready" : formData.enableAudio ? "Training Required" : "Not Enabled"}
+                          </span>
+                          {hasValidVoiceId && (
+                            <div className="flex items-center justify-center space-x-1 text-xs text-green-600 dark:text-green-400">
+                              <Mic className="h-3 w-3" />
+                              <span>Voice Trained</span>
+                            </div>
+                          )}
+                          {isRandomVoiceId && (
+                            <div className="flex items-center justify-center space-x-1 text-xs text-orange-600 dark:text-orange-400">
+                              <AlertCircle className="h-3 w-3" />
+                              <span>Needs Training</span>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 </CardContent>
               </Card>
@@ -3280,6 +3815,29 @@ INSTRUCTIONS:
                 </CardContent>
               </Card>
             </div>
+
+            {/* Memory Layer Control */}
+            {createdCloneId && (
+              <MemoryLayerControl
+                cloneId={createdCloneId}
+                hasDocuments={
+                  (formData.documents && formData.documents.length > 0) ||
+                  (formData.existingDocuments && formData.existingDocuments.length > 0)
+                }
+                documentCount={
+                  (formData.documents?.length || 0) + 
+                  (formData.existingDocuments?.length || 0)
+                }
+                onRAGEnabled={(enabled) => {
+                  // Optional: Track RAG enablement state
+                  console.log('RAG enabled:', enabled);
+                }}
+                onRAGReady={(ready) => {
+                  // Optional: Track when RAG is ready for testing
+                  console.log('RAG ready:', ready);
+                }}
+              />
+            )}
 
             {/* Main Testing Interface */}
             <Card>
@@ -3324,9 +3882,101 @@ INSTRUCTIONS:
                               }`}
                             >
                               <p className="text-sm">{message.content}</p>
+                              
+                              {/* Audio Player for Voice Responses */}
+                              {message.sender === "clone" && message.audioUrl && (
+                                <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-600">
+                                  <div className="flex items-center space-x-2">
+                                    <div className="flex items-center space-x-1 text-blue-600 dark:text-blue-400">
+                                      <Mic className="h-3 w-3" />
+                                      <span className="text-xs">Voice Response</span>
+                                    </div>
+                                  </div>
+                                  <audio 
+                                    controls 
+                                    className="w-full mt-2" 
+                                    style={{ height: '32px' }}
+                                    onError={(e) => {
+                                      console.error('Audio playback error:', e);
+                                      // Cleanup the URL on error
+                                      if (message.audioUrl) {
+                                        URL.revokeObjectURL(message.audioUrl);
+                                      }
+                                    }}
+                                  >
+                                    <source src={message.audioUrl} type="audio/mpeg" />
+                                    Your browser does not support audio playback.
+                                  </audio>
+                                </div>
+                              )}
+                              
+                              {/* RAG Source Attribution */}
+                              {message.sender === "clone" && message.id !== "typing" && message.ragData && (
+                                <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-600 space-y-2">
+                                  {/* Confidence and Memory Layer Status */}
+                                  <div className="flex items-center justify-between text-xs">
+                                    <div className="flex items-center space-x-2">
+                                      {message.ragData.usedMemoryLayer ? (
+                                        <div className="flex items-center space-x-1 text-purple-600 dark:text-purple-400">
+                                          <Brain className="h-3 w-3" />
+                                          <span>Memory Layer</span>
+                                        </div>
+                                      ) : (
+                                        <div className="flex items-center space-x-1 text-blue-600 dark:text-blue-400">
+                                          <Shield className="h-3 w-3" />
+                                          <span>AI Knowledge</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center space-x-1 text-slate-500 dark:text-slate-400">
+                                      <Star className="h-3 w-3" />
+                                      <span>{Math.round(message.ragData.confidenceScore * 100)}%</span>
+                                    </div>
+                                  </div>
+
+                                  {/* Sources */}
+                                  {message.ragData.sources.length > 0 && (
+                                    <div className="space-y-1">
+                                      <div className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                                        Sources:
+                                      </div>
+                                      {message.ragData.sources.slice(0, 3).map((source, idx) => (
+                                        <div key={idx} className="flex items-start space-x-2 text-xs">
+                                          <Book className="h-3 w-3 text-slate-400 mt-0.5 flex-shrink-0" />
+                                          <div className="min-w-0 flex-1">
+                                            <div className="font-medium text-slate-700 dark:text-slate-300 truncate">
+                                              {source.document_name}
+                                            </div>
+                                            {source.content_snippet && (
+                                              <div className="text-slate-500 dark:text-slate-400 overflow-hidden">
+                                                "{source.content_snippet.substring(0, 80)}..."
+                                              </div>
+                                            )}
+                                          </div>
+                                          <div className="text-slate-400 text-xs">
+                                            {Math.round(source.relevance_score * 100)}%
+                                          </div>
+                                        </div>
+                                      ))}
+                                      {message.ragData.sources.length > 3 && (
+                                        <div className="text-xs text-slate-500 dark:text-slate-400 italic">
+                                          +{message.ragData.sources.length - 3} more sources
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {/* Response Time */}
+                                  <div className="text-xs text-slate-400 dark:text-slate-500">
+                                    Response time: {message.ragData.responseTime}ms
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Standard Attribution */}
                               {message.sender === "clone" && message.id !== "typing" && (
                                 <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                                  {formData.name} • Powered by GPT-5
+                                  {formData.name} • {message.ragData?.usedMemoryLayer ? 'Enhanced with Memory Layer' : 'Powered by GPT-5'}
                                 </div>
                               )}
                             </div>
@@ -3388,19 +4038,47 @@ INSTRUCTIONS:
                     )}
                     
                     {testingMode === 'audio' && (
-                      <div className="flex space-x-2 items-center">
-                        <div className="flex-1 text-center py-4 bg-slate-50 dark:bg-slate-800 rounded-lg border-2 border-dashed border-slate-300 dark:border-slate-600">
-                          <p className="text-sm text-slate-600 dark:text-slate-300 mb-3">
-                            {isRecording ? "🎙️ Recording... Click stop when done" : "🎤 Click to start voice recording"}
-                          </p>
-                        </div>
-                        <Button 
-                          onClick={isRecording ? stopAudioRecording : startAudioRecording}
-                          variant={isRecording ? 'destructive' : 'default'}
-                        >
-                          <Mic className="h-4 w-4 mr-1" />
-                          {isRecording ? 'Stop' : 'Record'}
-                        </Button>
+                      <div className="space-y-3">
+                        {formData.voiceId && !formData.voiceId.startsWith('voice_') ? (
+                          <>
+                            <div className="flex items-center space-x-2 text-sm text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 p-3 rounded-lg">
+                              <Mic className="h-4 w-4" />
+                              <span>Voice clone ready - responses will be generated with your AI voice</span>
+                            </div>
+                            <div className="flex space-x-2">
+                              <Input
+                                value={testInput}
+                                onChange={(e) => setTestInput(e.target.value)}
+                                placeholder={`Ask ${formData.name || 'your clone'} anything about ${formData.expertise || 'their expertise'}... (Voice response will be generated)`}
+                                onKeyPress={(e) => e.key === "Enter" && !e.shiftKey && handleTestMessage()}
+                                className="flex-1"
+                              />
+                              <Button 
+                                onClick={handleTestMessage}
+                                disabled={!testInput.trim()}
+                              >
+                                <Mic className="h-4 w-4 mr-1" />
+                                Send & Speak
+                              </Button>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="text-center py-6 bg-slate-50 dark:bg-slate-800 rounded-lg border-2 border-dashed border-slate-300 dark:border-slate-600">
+                            <Mic className="h-8 w-8 mx-auto text-slate-400 mb-3" />
+                            <p className="text-sm text-slate-600 dark:text-slate-300 mb-2">
+                              {formData.voiceId && formData.voiceId.startsWith('voice_') 
+                                ? 'Voice training required'
+                                : 'Voice clone not available'
+                              }
+                            </p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                              {formData.voiceId && formData.voiceId.startsWith('voice_') 
+                                ? 'Please upload an audio file in the Media Training section to complete voice training'
+                                : 'Enable Audio Training in Media Training section to use voice responses'
+                              }
+                            </p>
+                          </div>
+                        )}
                       </div>
                     )}
                     
@@ -3922,13 +4600,32 @@ INSTRUCTIONS:
             <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
               {createdCloneId ? 'Edit Your AI Clone' : 'Create Your AI Clone'}
             </h1>
-            <div className="text-sm text-slate-600 dark:text-slate-300">
-              Step {currentStep} of {steps.length}
+            <div className="flex items-center space-x-3">
+              {createdCloneId && ragHook.status === 'ready' && (
+                <div className="flex items-center space-x-1 text-xs text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-900/20 px-2 py-1 rounded-full">
+                  <Brain className="h-3 w-3" />
+                  <span>Memory Layer Active</span>
+                </div>
+              )}
+              {createdCloneId && ragHook.status === 'initializing' && (
+                <div className="flex items-center space-x-1 text-xs text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-2 py-1 rounded-full">
+                  <RefreshCw className="h-3 w-3 animate-spin" />
+                  <span>Initializing Memory</span>
+                </div>
+              )}
+              <div className="text-sm text-slate-600 dark:text-slate-300">
+                Step {currentStep} of {getSteps().length}
+              </div>
             </div>
           </div>
           <Progress value={progress} className="mb-4" />
           <div className="hidden lg:flex items-center space-x-4 overflow-x-auto">
-            {steps.map((step) => (
+            {getSteps(ragHook.status, 
+              (formData.documents && formData.documents.length > 0) || 
+              (formData.links && formData.links.length > 0) ||
+              (formData.existingDocuments && formData.existingDocuments.length > 0) ||
+              (formData.existingLinks && formData.existingLinks.length > 0)
+            ).map((step) => (
               <div
                 key={step.id}
                 className={`flex items-center space-x-2 whitespace-nowrap ${
@@ -3962,7 +4659,7 @@ INSTRUCTIONS:
         {/* Step Content */}
         <Card className="mb-8">
           <CardHeader>
-            <CardTitle>{steps[currentStep - 1].title}</CardTitle>
+            <CardTitle>{getSteps()[currentStep - 1]?.title}</CardTitle>
           </CardHeader>
           <CardContent>
             <AnimatePresence mode="wait">
@@ -4003,7 +4700,10 @@ INSTRUCTIONS:
             >
               Save & Exit
             </Button>
-            {currentStep === steps.length ? (
+            {currentStep === 6 ? (
+              // Testing & Preview step - only show Save & Exit
+              null
+            ) : currentStep === getSteps().length ? (
               <Button 
                 className="bg-green-600 hover:bg-green-700 w-full sm:w-auto"
                 onClick={handleFinalSubmit}

@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     GPT_4_MODEL: str = "gpt-4-turbo-preview"
     GPT_4_MINI_MODEL: str = "gpt-4o-mini"
     
+    # LlamaCloud settings
+    LLAMAPARSE_API_KEY: Optional[str] = None
+    
+    # ElevenLabs settings
+    ELEVENLABS_API_KEY: Optional[str] = None
     
     # Redis settings (for caching and background tasks)
     REDIS_URL: str = "redis://localhost:6379"
@@ -85,6 +90,19 @@ class Settings(BaseSettings):
         "finance-investment": "Finance & Investment",
         "legal-consulting": "Legal & Consulting"
     }
+    
+    # RAG System settings
+    RAG_API_BASE_URL: str = "http://localhost:8000/api"
+    RAG_API_KEY: Optional[str] = None
+    RAG_API_TIMEOUT: int = 30
+    RAG_MAX_RETRIES: int = 3
+    RAG_ENABLED: bool = True
+    RAG_INITIALIZATION_TIMEOUT: int = 300
+    RAG_CONFIDENCE_THRESHOLD: float = 0.3
+    RAG_HIGH_CONFIDENCE_THRESHOLD: float = 0.7
+    RAG_MAX_DOCUMENTS: int = 100
+    RAG_CHUNK_SIZE: int = 1000
+    RAG_CHUNK_OVERLAP: int = 200
     
     # Logging settings
     LOG_LEVEL: str = "INFO"

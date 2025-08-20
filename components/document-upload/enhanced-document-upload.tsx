@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Upload, FileText, X, AlertCircle, CheckCircle } from 'lucide-react'
 import { DuplicateDetector } from './duplicate-detector'
 import { toast } from '@/components/ui/use-toast'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 
 interface PendingUpload {
   id: string
@@ -35,6 +36,9 @@ interface EnhancedDocumentUploadProps {
   existingDocuments?: ExistingDocument[]
   maxFileSize?: number // in MB
   allowedExtensions?: string[]
+  expertName?: string
+  domainName?: string
+  onDocumentRemoved?: (documentId: string) => void
 }
 
 export function EnhancedDocumentUpload({
@@ -42,7 +46,10 @@ export function EnhancedDocumentUpload({
   onDocumentUploaded,
   existingDocuments = [],
   maxFileSize = 10,
-  allowedExtensions = ['.pdf', '.doc', '.docx', '.txt', '.md', '.rtf']
+  allowedExtensions = ['.pdf', '.doc', '.docx', '.txt', '.md', '.rtf'],
+  expertName,
+  domainName,
+  onDocumentRemoved
 }: EnhancedDocumentUploadProps) {
   // Input validation with error boundaries
   React.useEffect(() => {
@@ -62,6 +69,8 @@ export function EnhancedDocumentUpload({
   }, [cloneId, onDocumentUploaded, existingDocuments])
   const [pendingUploads, setPendingUploads] = useState<PendingUpload[]>([])
   const [dragActive, setDragActive] = useState(false)
+  const [documentToRemove, setDocumentToRemove] = useState<ExistingDocument | null>(null)
+  const [isRemoving, setIsRemoving] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const validateFile = (file: File): string | null => {
@@ -402,9 +411,108 @@ export function EnhancedDocumentUpload({
     updateUploadStatus(uploadId, 'checking')
   }
 
-  const handleUploadSuccess = (uploadId: string, document: any) => {
+  const callExpertUpdateEndpoint = async () => {
+    if (!expertName || !domainName) {
+      console.log('expertName or domainName not provided, skipping expert update call')
+      return
+    }
+
+    try {
+      const { createClient } = await import('@/utils/supabase/client')
+      const supabase = createClient()
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        console.warn('No session found for expert update')
+        return
+      }
+
+      const response = await fetch('http://127.0.0.1:8000/api/v1/rag/expert/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          expert_name: expertName,
+          domain_name: domainName,
+          qa_pairs: [] // Empty for now, can be expanded later
+        })
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+        console.log('Expert update completed successfully:', result)
+        toast({
+          title: "Expert updated successfully",
+          description: "Your expert's knowledge has been refreshed with the new documents",
+        })
+      } else {
+        console.warn('Expert update failed:', response.status)
+      }
+    } catch (error) {
+      console.error('Error calling expert update endpoint:', error)
+    }
+  }
+
+  const removeDocument = async (document: ExistingDocument) => {
+    if (!document.id) return
+
+    setIsRemoving(true)
+    try {
+      const { createClient } = await import('@/utils/supabase/client')
+      const supabase = createClient()
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        throw new Error('Authentication required for document removal')
+      }
+
+      // Call backend to remove document, assistants, and vector store
+      const response = await fetch(`http://127.0.0.1:8000/api/v1/clones/${cloneId}/documents/${document.id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`
+        }
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Failed to remove document: ${response.status} - ${errorText}`)
+      }
+
+      toast({
+        title: "Document removed successfully",
+        description: "The document and associated AI resources have been deleted",
+      })
+
+      // Call parent callback to update the UI
+      if (onDocumentRemoved) {
+        onDocumentRemoved(document.id)
+      }
+
+      // Update expert after removal
+      await callExpertUpdateEndpoint()
+
+    } catch (error) {
+      console.error('Failed to remove document:', error)
+      toast({
+        title: "Failed to remove document",
+        description: error instanceof Error ? error.message : 'An unknown error occurred',
+        variant: "destructive",
+      })
+    } finally {
+      setIsRemoving(false)
+      setDocumentToRemove(null)
+    }
+  }
+
+  const handleUploadSuccess = async (uploadId: string, document: any) => {
     updateUploadStatus(uploadId, 'completed')
     onDocumentUploaded(document)
+    
+    // Call expert update endpoint after successful upload
+    await callExpertUpdateEndpoint()
     
     // Remove completed upload after a delay
     setTimeout(() => {
@@ -470,6 +578,75 @@ export function EnhancedDocumentUpload({
 
   return (
     <div className="space-y-4">
+      {/* Existing Documents */}
+      {existingDocuments.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <FileText className="h-5 w-5" />
+                <span>Existing Documents ({existingDocuments.length})</span>
+              </div>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {existingDocuments.map((document) => (
+                <div key={document.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border">
+                  <div className="flex items-center space-x-3 flex-1 min-w-0">
+                    <FileText className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm font-medium truncate block">
+                        {document.name || 'Untitled Document'}
+                      </span>
+                      <div className="flex items-center space-x-2 mt-1">
+                        <Badge 
+                          variant="secondary" 
+                          className={
+                            document.status === 'completed' ? 'bg-green-100 text-green-800' :
+                            document.status === 'processing' ? 'bg-blue-100 text-blue-800' :
+                            document.status === 'failed' ? 'bg-red-100 text-red-800' :
+                            'bg-gray-100 text-gray-800'
+                          }
+                        >
+                          {document.status || 'unknown'}
+                        </Badge>
+                        {document.type && (
+                          <Badge variant="outline" className="text-xs">
+                            {document.type}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-2 ml-3">
+                    {document.url && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => window.open(document.url, '_blank')}
+                        disabled={isRemoving}
+                      >
+                        <FileText className="h-4 w-4" />
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setDocumentToRemove(document)}
+                      disabled={isRemoving}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Upload Area */}
       <Card>
         <CardHeader>
@@ -597,6 +774,46 @@ export function EnhancedDocumentUpload({
           </CardContent>
         </Card>
       )}
+
+      {/* Document Removal Confirmation Dialog */}
+      <AlertDialog open={!!documentToRemove} onOpenChange={() => !isRemoving && setDocumentToRemove(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove Document</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to remove "{documentToRemove?.name || 'this document'}"? 
+              This action will:
+              <ul className="list-disc list-inside mt-2 space-y-1">
+                <li>Delete the document from storage</li>
+                <li>Remove associated AI assistants</li>
+                <li>Delete vector store embeddings</li>
+                <li>Update the expert's knowledge base</li>
+              </ul>
+              <br />
+              <strong>This action cannot be undone.</strong>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isRemoving}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => documentToRemove && removeDocument(documentToRemove)}
+              disabled={isRemoving}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {isRemoving ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  Removing...
+                </>
+              ) : (
+                'Remove Document'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

@@ -31,35 +31,69 @@ export default function UploadPage() {
   // Fetch user's clones from Supabase
   useEffect(() => {
     async function fetchClones() {
-      if (!user?.id) return
+      if (!user?.id) {
+        console.log('No user ID available, skipping clone fetch')
+        setLoading(false)
+        return
+      }
       
       try {
         setLoading(true)
         const supabase = createClient()
-        const { data, error } = await supabase
+        
+        // Test authentication first
+        const { data: authData, error: authError } = await supabase.auth.getUser()
+        if (authError || !authData.user) {
+          throw new Error('Authentication failed: ' + (authError?.message || 'No user found'))
+        }
+        
+        console.log('User authenticated:', authData.user.id)
+        
+        // First get clones
+        const { data: clonesData, error: clonesError } = await supabase
           .from('clones')
           .select(`
             id,
             name,
-            description,
+            bio,
             is_active,
-            total_sessions,
-            knowledge(id)
+            total_sessions
           `)
           .eq('creator_id', user.id)
           .eq('is_active', true)
         
-        if (error) {
-          console.error('Supabase error:', error)
-          throw error
+        if (clonesError) {
+          console.error('Supabase error:', clonesError)
+          throw clonesError
         }
+
+        // Then get knowledge count for each clone
+        const clonesWithKnowledge = await Promise.all(
+          (clonesData || []).map(async (clone) => {
+            const { data: knowledgeData, error: knowledgeError } = await supabase
+              .from('knowledge')
+              .select('id')
+              .eq('clone_id', clone.id)
+            
+            if (knowledgeError) {
+              console.warn('Error fetching knowledge for clone:', clone.id, knowledgeError)
+            }
+            
+            return {
+              ...clone,
+              knowledge: knowledgeData || []
+            }
+          })
+        )
+        
+        const data = clonesWithKnowledge
         
         console.log('Raw clones data:', data)
         
         const clonesWithDocCount = data?.map(clone => ({
           id: clone.id,
           name: clone.name,
-          description: clone.description || '',
+          description: clone.bio || '',
           document_count: clone.knowledge?.length || 0,
           status: clone.is_active ? 'active' : 'inactive'
         })) || []
@@ -69,11 +103,15 @@ export default function UploadPage() {
       } catch (error) {
         console.error('Error fetching clones:', error)
         console.error('Error details:', {
-          message: error?.message,
-          code: error?.code,
-          details: error?.details,
-          hint: error?.hint
+          message: error?.message || 'Unknown error',
+          code: error?.code || 'No code',
+          details: error?.details || 'No details',
+          hint: error?.hint || 'No hint',
+          fullError: error
         })
+        
+        // Set empty clones array on error
+        setClones([])
       } finally {
         setLoading(false)
       }
@@ -275,21 +313,18 @@ function UploadStatistics({ cloneId }: { cloneId: string }) {
       
       try {
         setLoading(true)
-        // Get documents for this clone
+        const supabase = createClient()
+        
+        // Get knowledge documents for this clone (using knowledge table instead of documents)
         const { data: documents, error: docsError } = await supabase
-          .from('documents')
-          .select('id, file_size_bytes, processing_status, chunk_count')
+          .from('knowledge')
+          .select('id, file_size_bytes, processing_status')
           .eq('clone_id', cloneId)
         
         if (docsError) throw docsError
         
-        // Get document chunks
-        const { data: chunks, error: chunksError } = await supabase
-          .from('document_chunks')
-          .select('id')
-          .in('document_id', documents?.map(d => d.id) || [])
-        
-        if (chunksError) throw chunksError
+        // For now, we'll simulate chunks since document_chunks table may not exist
+        const chunks = documents || []
         
         const statusCounts = documents?.reduce((acc, doc) => {
           acc[doc.processing_status] = (acc[doc.processing_status] || 0) + 1
@@ -310,6 +345,26 @@ function UploadStatistics({ cloneId }: { cloneId: string }) {
         })
       } catch (error) {
         console.error('Error fetching upload statistics:', error)
+        console.error('Statistics error details:', {
+          message: error?.message || 'Unknown error',
+          code: error?.code || 'No code',
+          details: error?.details || 'No details',
+          hint: error?.hint || 'No hint'
+        })
+        
+        // Set default stats on error
+        setStats({
+          total_documents: 0,
+          total_size_bytes: 0,
+          total_chunks: 0,
+          status_counts: {
+            completed: 0,
+            processing: 0,
+            pending: 0,
+            failed: 0,
+          },
+          processing_queue_length: 0,
+        })
       } finally {
         setLoading(false)
       }

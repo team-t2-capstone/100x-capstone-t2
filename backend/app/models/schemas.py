@@ -427,6 +427,7 @@ class CloneResponse(BaseSchema):
     is_published: bool
     is_active: bool
     creator_id: str
+    voice_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     published_at: Optional[datetime] = None
@@ -1048,3 +1049,100 @@ class SummarySearchResult(BaseSchema):
     generated_at: datetime
     clone_name: Optional[str]
     session_duration: Optional[int]
+
+
+# Enhanced RAG Integration Schemas
+class RAGInitializationRequest(BaseModel):
+    """Request for initializing RAG memory layer"""
+    documents: List[Dict[str, Any]] = Field(default_factory=list)
+    config: Optional[Dict[str, Any]] = None
+    force_reinitialize: bool = False
+
+class RAGInitializationResponse(BaseModel):
+    """Response from RAG initialization"""
+    initialization_id: str
+    status: str
+    estimated_duration_seconds: Optional[int] = None
+    document_count: int = 0
+    message: str = ""
+
+class RAGStatusResponse(BaseModel):
+    """RAG system status response"""
+    is_ready: bool
+    status: str
+    initialization_id: Optional[str] = None
+    document_count: int = 0
+    last_initialized: Optional[datetime] = None
+    error_message: Optional[str] = None
+
+class RAGDocument(BaseModel):
+    """RAG document structure"""
+    name: str
+    url: Optional[str] = None
+    content: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class RAGQueryRequestEnhanced(BaseModel):
+    """Enhanced RAG query request"""
+    expert_name: str
+    query: str
+    context: Optional[Dict[str, Any]] = None
+    options: Optional[Dict[str, Any]] = None
+    personality_config: Optional[Dict[str, Any]] = None
+
+class RAGSource(BaseModel):
+    """RAG response source"""
+    document_name: str
+    content_snippet: str
+    relevance_score: float
+    page: Optional[int] = None
+
+class RAGQueryResponseEnhanced(BaseModel):
+    """Enhanced RAG query response"""
+    response: str
+    confidence_score: float
+    sources: List[RAGSource] = Field(default_factory=list)
+    used_memory_layer: bool
+    used_llm_fallback: bool
+    used_personality_enhancement: bool
+    tokens_used: int
+    response_time_ms: int
+    query_type: str
+
+class RAGUpdateRequest(BaseModel):
+    """RAG expert update request"""
+    expert_name: str
+    operation: str  # 'add', 'update', 'delete'
+    documents: List[RAGDocument] = Field(default_factory=list)
+    update_config: Optional[Dict[str, Any]] = None
+
+class RAGUpdateResponse(BaseModel):
+    """RAG expert update response"""
+    status: str
+    documents_processed: int
+    documents_added: int
+    documents_updated: int
+    documents_failed: int
+    update_time: datetime
+
+class InitializationStatusResponse(BaseModel):
+    """Initialization status response"""
+    id: str
+    status: str
+    progress: int
+    phase: str
+    processedDocuments: int
+    totalDocuments: int
+    failedDocuments: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+    completed: bool
+    success: bool
+
+class EnhancedChatResponse(BaseModel):
+    """Enhanced chat response with RAG data"""
+    content: str
+    query_type: str
+    rag_data: Optional[RAGQueryResponseEnhanced] = None
+    confidence_score: float = 0.0
+    response_time_ms: int
+    tokens_used: int

@@ -262,8 +262,7 @@ async def get_expert_details(
             "avatar_url": clone.avatar_url,
             "pricing": {
                 "base_price": float(clone.base_price),
-                "currency": clone.currency,
-                "billing_unit": "per_minute"
+                "currency": clone.currency
             },
             "performance": {
                 "average_rating": float(clone.average_rating),

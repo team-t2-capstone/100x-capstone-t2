@@ -56,7 +56,7 @@ async def create_session(
                 detail="Expert clone not found or not available"
             )
         
-        # Get user info for billing checks
+        # Get user info
         user_result = await db.execute(
             select(UserProfile).where(UserProfile.id == current_user_id)
         )

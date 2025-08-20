@@ -434,10 +434,12 @@ async def generate_ai_response_realtime(
     clone: Clone,
     db: AsyncSession
 ):
-    """Generate AI response and broadcast to session participants"""
+    """Generate AI response using RAG and broadcast to session participants"""
     try:
-        # Simulate AI processing (in production, integrate with your AI system)
         import asyncio
+        import httpx
+        from app.api.rag_memory import query_expert_with_assistant_endpoint
+        from app.api.rag_models import QueryRequest
         
         # Send typing indicator for AI
         await manager.broadcast_to_session({
@@ -448,11 +450,93 @@ async def generate_ai_response_realtime(
             "timestamp": datetime.utcnow().isoformat()
         }, session_id)
         
-        # Simulate processing time
-        await asyncio.sleep(2)
+        # Get or create thread_id for this session (stored in session metadata)
+        session_result = await db.execute(
+            select(Session).where(Session.id == session_id)
+        )
+        session = session_result.scalar_one_or_none()
         
-        # Generate response (placeholder - integrate with your AI system)
-        ai_response_content = f"Thank you for your message. As {clone.name}, I understand you're asking about: {user_message[:100]}..."
+        if not session:
+            raise Exception("Session not found")
+        
+        # Get thread_id from session metadata or None for first call
+        thread_id = None
+        if session.metadata and isinstance(session.metadata, dict):
+            thread_id = session.metadata.get("rag_thread_id")
+        
+        # Determine memory type based on query content
+        memory_type = "expert"  # Default
+        if "llm" in user_message.lower() or "general" in user_message.lower():
+            memory_type = "llm"
+        
+        try:
+            # Call RAG query endpoint
+            query_request = QueryRequest(
+                query=user_message,
+                expert_name=str(clone.id),
+                memory_type=memory_type,
+                client_name=None,
+                thread_id=thread_id if thread_id else None
+            )
+            
+            rag_response = await query_expert_with_assistant_endpoint(query_request)
+            
+            # Extract response content and thread_id
+            if isinstance(rag_response, dict):
+                # Handle nested response format from rag_utils
+                response_data = rag_response.get("response", "")
+                if isinstance(response_data, dict) and "text" in response_data:
+                    ai_response_content = response_data["text"]
+                else:
+                    ai_response_content = str(response_data) if response_data else ""
+                new_thread_id = rag_response.get("thread_id")
+                
+                # Store thread_id in session metadata for future calls
+                if new_thread_id and new_thread_id != thread_id:
+                    session_metadata = session.metadata if session.metadata else {}
+                    session_metadata["rag_thread_id"] = new_thread_id
+                    session.metadata = session_metadata
+                    await db.commit()
+                
+            else:
+                # Handle response object
+                ai_response_content = getattr(rag_response, 'response', str(rag_response))
+                new_thread_id = getattr(rag_response, 'thread_id', None)
+                
+                if new_thread_id and new_thread_id != thread_id:
+                    session_metadata = session.metadata if session.metadata else {}
+                    session_metadata["rag_thread_id"] = new_thread_id
+                    session.metadata = session_metadata
+                    await db.commit()
+            
+        except Exception as rag_error:
+            logger.warning("RAG query failed, falling back to LLM", error=str(rag_error))
+            
+            # Fallback to LLM if RAG fails or doesn't return good response
+            try:
+                llm_query_request = QueryRequest(
+                    query=user_message,
+                    expert_name=str(clone.id),
+                    memory_type="llm",
+                    client_name=None,
+                    thread_id=thread_id if thread_id else None
+                )
+                
+                llm_response = await query_expert_with_assistant_endpoint(llm_query_request)
+                
+                if isinstance(llm_response, dict):
+                    # Handle nested response format from rag_utils
+                    response_data = llm_response.get("response", "")
+                    if isinstance(response_data, dict) and "text" in response_data:
+                        ai_response_content = response_data["text"]
+                    else:
+                        ai_response_content = str(response_data) if response_data else f"As {clone.name}, I understand you're asking about: {user_message[:100]}..."
+                else:
+                    ai_response_content = getattr(llm_response, 'response', f"As {clone.name}, I understand you're asking about: {user_message[:100]}...")
+                    
+            except Exception as llm_error:
+                logger.error("LLM fallback also failed", error=str(llm_error))
+                ai_response_content = f"I apologize, but I'm having trouble processing your request right now. As {clone.name}, let me try to help you with: {user_message[:100]}..."
         
         # Create AI message in database
         ai_message = Message(

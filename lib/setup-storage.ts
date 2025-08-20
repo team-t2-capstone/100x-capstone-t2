@@ -2,7 +2,9 @@
  * Supabase Storage Setup Script
  * Creates required storage buckets and sets up RLS policies
  */
-import { supabase } from './supabase'
+import { createClient } from '@/utils/supabase/client'
+
+const supabase = createClient()
 
 export async function setupStorageBuckets() {
   console.log('Setting up Supabase storage buckets...')

@@ -147,6 +147,7 @@ export default function CloneProfilePage() {
         // Transform clone data to match our expert interface
         const transformedExpert: ExpertData = {
           ...cloneData,
+          rating: cloneData.average_rating || 0,
           type: cloneData.category || 'coaching',
           specialty: cloneData.description,
           sessions: cloneData.total_sessions || 0,
@@ -169,10 +170,11 @@ export default function CloneProfilePage() {
         setExpert(transformedExpert)
       } catch (error) {
         console.error('Failed to fetch clone:', error)
-        setError('Failed to load clone profile')
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+        setError(`Failed to load clone profile: ${errorMessage}`)
         toast({
           title: "Error",
-          description: "Failed to load clone profile",
+          description: `Failed to load clone profile: ${errorMessage}`,
           variant: "destructive",
         })
       } finally {

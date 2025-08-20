@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react"
 import { useAuth } from '@/contexts/auth-context'
 import { useUserProfile } from '@/hooks/use-dashboard'
-import { useAdvancedBilling } from '@/hooks/use-billing'
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -62,15 +61,6 @@ export default function ProfilePage() {
     refresh
   } = useUserProfile(user?.id || '')
   
-  const {
-    billingData,
-    loading: billingLoading,
-    error: billingError,
-    addPaymentMethod,
-    removePaymentMethod,
-    setPrimaryPaymentMethod,
-    downloadInvoice
-  } = useAdvancedBilling(user?.id || '')
   
   // Update local state when profile data loads
   useEffect(() => {
@@ -164,11 +154,10 @@ export default function ProfilePage() {
         </div>
 
         <Tabs defaultValue="profile" className="w-full">
-          <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 mb-8">
+          <TabsList className="grid w-full grid-cols-3 mb-8">
             <TabsTrigger value="profile">Profile</TabsTrigger>
             <TabsTrigger value="preferences">Preferences</TabsTrigger>
             <TabsTrigger value="security">Security</TabsTrigger>
-            <TabsTrigger value="billing">Billing</TabsTrigger>
           </TabsList>
 
           <TabsContent value="profile" className="space-y-6">
@@ -570,166 +559,6 @@ export default function ProfilePage() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="billing" className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center space-x-2">
-                  <CreditCard className="h-5 w-5" />
-                  <span>Payment Methods</span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {billingLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="h-6 w-6 animate-spin mr-2" />
-                    <span>Loading payment methods...</span>
-                  </div>
-                ) : !billingData?.paymentMethods.length ? (
-                  <div className="text-center py-8 text-slate-500">
-                    <CreditCard className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                    <p>No payment methods added</p>
-                  </div>
-                ) : (
-                  billingData.paymentMethods.map((pm) => (
-                    <div key={pm.id} className="flex items-center space-x-3 p-4 border border-slate-200 dark:border-slate-700 rounded-lg">
-                      <CreditCard className="h-8 w-8 text-slate-400" />
-                      <div className="flex-1">
-                        <p className="font-medium">
-                          {pm.brand?.toUpperCase()} •••• {pm.last4}
-                        </p>
-                        <p className="text-sm text-slate-500">
-                          Expires {pm.expiryMonth?.toString().padStart(2, '0')}/{pm.expiryYear?.toString().slice(-2)}
-                        </p>
-                      </div>
-                      {pm.isPrimary && <Badge>Primary</Badge>}
-                      <Button variant="ghost" size="sm">
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  ))
-                )}
-                <Button variant="outline" className="w-full bg-transparent">
-                  Add Payment Method
-                </Button>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Billing History</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {billingLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="h-6 w-6 animate-spin mr-2" />
-                    <span>Loading billing history...</span>
-                  </div>
-                ) : billingError ? (
-                  <Alert variant="destructive">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertDescription>{billingError}</AlertDescription>
-                  </Alert>
-                ) : !billingData?.recentTransactions.length ? (
-                  <div className="text-center py-8 text-slate-500">
-                    <CreditCard className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                    <p>No billing history yet</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {billingData.recentTransactions.map((transaction) => (
-                      <div key={transaction.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 border border-slate-200 dark:border-slate-700 rounded-lg space-y-2 sm:space-y-0">
-                        <div>
-                          <p className="font-medium">{new Date(transaction.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long' })}</p>
-                          <p className="text-sm text-slate-500">{transaction.description}</p>
-                          <p className="text-xs text-slate-400">{transaction.paymentMethod}</p>
-                        </div>
-                        <div className="text-left sm:text-right">
-                          <p className="font-medium">${transaction.amount.toFixed(2)}</p>
-                          <div className="flex items-center space-x-2">
-                            <Badge 
-                              variant={transaction.status === 'completed' ? 'default' : transaction.status === 'failed' ? 'destructive' : 'secondary'}
-                              className="text-xs"
-                            >
-                              {transaction.status}
-                            </Badge>
-                            {transaction.invoiceUrl && (
-                              <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                className="p-0 h-auto"
-                                onClick={() => downloadInvoice(transaction.id)}
-                              >
-                                Download
-                              </Button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Subscription</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {billingLoading ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="h-6 w-6 animate-spin mr-2" />
-                    <span>Loading subscription...</span>
-                  </div>
-                ) : !billingData?.subscription ? (
-                  <div className="text-center py-8 text-slate-500">
-                    <CreditCard className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                    <p>No active subscription</p>
-                    <Button className="mt-4">
-                      Subscribe to Premium
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <div className="flex items-center space-x-2">
-                          <h4 className="font-medium text-slate-900 dark:text-white">{billingData.subscription.plan}</h4>
-                          <Badge 
-                            variant={billingData.subscription.status === 'active' ? 'default' : 'secondary'}
-                          >
-                            {billingData.subscription.status}
-                          </Badge>
-                        </div>
-                        <p className="text-sm text-slate-600 dark:text-slate-300">
-                          Unlimited sessions with featured experts
-                        </p>
-                        <p className="text-xs text-slate-400 mt-1">
-                          Next billing: {new Date(billingData.subscription.currentPeriodEnd).toLocaleDateString()}
-                        </p>
-                      </div>
-                      <div className="text-left sm:text-right">
-                        <p className="text-2xl font-bold text-slate-900 dark:text-white">
-                          ${billingData.subscription.amount.toFixed(2)}
-                        </p>
-                        <p className="text-sm text-slate-500">
-                          per {billingData.subscription.interval}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex flex-col sm:flex-row gap-4">
-                      <Button variant="outline" className="bg-transparent">
-                        Change Plan
-                      </Button>
-                      <Button variant="ghost">
-                        {billingData.subscription.cancelAtPeriodEnd ? 'Reactivate' : 'Cancel'} Subscription
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
         </Tabs>
       </div>
     </div>

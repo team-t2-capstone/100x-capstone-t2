@@ -13,9 +13,25 @@ import structlog
 
 from ..database import get_supabase, get_service_supabase
 from ..config import settings
-from .rag_core import get_openai_client, validate_openai_configuration
+from ..api.rag_utils import get_openai_client
 
 logger = structlog.get_logger()
+
+
+def validate_openai_configuration():
+    """Validate OpenAI configuration"""
+    try:
+        if not settings.OPENAI_API_KEY:
+            return {"valid": False, "error": "OpenAI API key not configured"}
+        
+        # Test client initialization
+        client = get_openai_client()
+        if client:
+            return {"valid": True, "error": None}
+        else:
+            return {"valid": False, "error": "Failed to initialize OpenAI client"}
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
 
 
 class CleanupError(Exception):

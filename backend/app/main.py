@@ -20,7 +20,7 @@ from app.database import init_database, close_database, test_all_connections, db
 from app.core.security import get_security_headers
 
 # Import API routers
-from app.api import clones, users, discovery, sessions, chat, memory, summarization, analytics, billing, ai_chat, chat_websocket, webrtc, voice_video_calls, documents
+from app.api import clones, users, discovery, sessions, chat, memory, summarization, analytics, ai_chat, chat_websocket, webrtc, voice_video_calls, documents, rag_integration, rag_core, rag_memory, voice
 
 # Import auth conditionally
 try:
@@ -30,23 +30,51 @@ except ImportError:
     AUTH_AVAILABLE = False
     auth = None
 
-# Configure structured logging
-structlog.configure(
-    processors=[
-        structlog.stdlib.filter_by_level,
-        structlog.stdlib.add_logger_name,
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.PositionalArgumentsFormatter(),
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-        structlog.processors.UnicodeDecoder(),
-        structlog.processors.JSONRenderer()
-    ],
-    context_class=dict,
-    logger_factory=structlog.stdlib.LoggerFactory(),
-    cache_logger_on_first_use=True,
+# Configure standard logging first
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler()
+    ]
 )
+
+# Configure structured logging for development (readable format)
+if settings.DEBUG:
+    structlog.configure(
+        processors=[
+            structlog.stdlib.filter_by_level,
+            structlog.stdlib.add_logger_name,
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.PositionalArgumentsFormatter(),
+            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.processors.UnicodeDecoder(),
+            structlog.dev.ConsoleRenderer()  # Human-readable format for development
+        ],
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+else:
+    # JSON format for production
+    structlog.configure(
+        processors=[
+            structlog.stdlib.filter_by_level,
+            structlog.stdlib.add_logger_name,
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.PositionalArgumentsFormatter(),
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.processors.UnicodeDecoder(),
+            structlog.processors.JSONRenderer()
+        ],
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
 
 logger = structlog.get_logger()
 
@@ -76,6 +104,12 @@ async def lifespan(app: FastAPI):
         # await init_redis()
         logger.info("Redis connection ready")
         
+        # Initialize RAG client
+        from app.services.rag_client import rag_client
+        if rag_client.is_available():
+            logger.info("RAG client initialized and available")
+        else:
+            logger.warning("RAG client not available - RAG features will be disabled")
         
         logger.info("All services initialized successfully")
         
@@ -95,6 +129,11 @@ async def lifespan(app: FastAPI):
         # Close Redis connection  
         # await close_redis()
         logger.info("Redis connection closed")
+        
+        # Close RAG client
+        from app.services.rag_client import cleanup_rag_client
+        await cleanup_rag_client()
+        logger.info("RAG client closed")
         
     except Exception as e:
         logger.error("Error during shutdown", error=str(e))
@@ -132,6 +171,7 @@ app.include_router(ai_chat.router, prefix=settings.API_V1_STR)  # AI chat endpoi
 app.include_router(chat_websocket.router, prefix=settings.API_V1_STR)  # WebSocket chat
 app.include_router(clones.router, prefix=settings.API_V1_STR)
 app.include_router(documents.router, prefix=settings.API_V1_STR, tags=["documents"])
+app.include_router(documents.knowledge_router, prefix=settings.API_V1_STR)
 app.include_router(users.router, prefix=settings.API_V1_STR)
 app.include_router(discovery.router, prefix=settings.API_V1_STR)
 app.include_router(sessions.router, prefix=settings.API_V1_STR)
@@ -139,9 +179,12 @@ app.include_router(chat.router, prefix=settings.API_V1_STR)
 app.include_router(memory.router, prefix=settings.API_V1_STR)
 app.include_router(summarization.router, prefix=settings.API_V1_STR)
 app.include_router(analytics.router, prefix=settings.API_V1_STR)
-app.include_router(billing.router, prefix=settings.API_V1_STR)
 app.include_router(webrtc.router, prefix=settings.API_V1_STR)
 app.include_router(voice_video_calls.router, prefix=settings.API_V1_STR)
+app.include_router(voice.router, prefix=settings.API_V1_STR)
+app.include_router(rag_integration.router, prefix=settings.API_V1_STR)
+app.include_router(rag_core.router)  # No prefix needed - already has /api prefix
+app.include_router(rag_memory.router, prefix="/api", tags=["RAG Memory"])  # Original RAG API endpoints
 
 # Health check endpoints
 @app.get("/health")
