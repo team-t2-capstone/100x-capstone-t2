@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+backend/venv/
+**/__pycache__/
+*.pyc
+
+# Environment variables
+.env
+.env.local
+
+# IDE & OS
+.vscode/
+.DS_Store
+
+# Logs
+*.log
+
+# Build outputs
+.next/
+build/
+dist/
+
+# Uploads
+backend/uploads/
+
+# Screenshots & analysis
+screenshots/
+ui-analysis-report.json
+*.js
+
+# Claude files
+.claude/
