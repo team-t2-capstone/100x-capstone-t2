@@ -14,47 +14,6 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
-      assistants: {
-        Row: {
-          assistant_id: string
-          client_name: string | null
-          created_at: string | null
-          expert_name: string
-          id: string
-          memory_type: string
-          updated_at: string | null
-          vector_id: string | null
-        }
-        Insert: {
-          assistant_id: string
-          client_name?: string | null
-          created_at?: string | null
-          expert_name: string
-          id?: string
-          memory_type: string
-          updated_at?: string | null
-          vector_id?: string | null
-        }
-        Update: {
-          assistant_id?: string
-          client_name?: string | null
-          created_at?: string | null
-          expert_name?: string
-          id?: string
-          memory_type?: string
-          updated_at?: string | null
-          vector_id?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "fk_expert"
-            columns: ["expert_name"]
-            isOneToOne: false
-            referencedRelation: "experts"
-            referencedColumns: ["name"]
-          },
-        ]
-      }
       clone_qa_data: {
         Row: {
           clone_id: string
@@ -102,11 +61,6 @@ export type Database = {
           personality_traits: Json | null
           professional_title: string | null
           published_at: string | null
-          rag_assistant_id: string | null
-          rag_domain_name: string | null
-          rag_expert_name: string | null
-          rag_status: string | null
-          rag_updated_at: string | null
           system_prompt: string | null
           temperature: number | null
           total_earnings: number | null
@@ -136,11 +90,6 @@ export type Database = {
           personality_traits?: Json | null
           professional_title?: string | null
           published_at?: string | null
-          rag_assistant_id?: string | null
-          rag_domain_name?: string | null
-          rag_expert_name?: string | null
-          rag_status?: string | null
-          rag_updated_at?: string | null
           system_prompt?: string | null
           temperature?: number | null
           total_earnings?: number | null
@@ -170,11 +119,6 @@ export type Database = {
           personality_traits?: Json | null
           professional_title?: string | null
           published_at?: string | null
-          rag_assistant_id?: string | null
-          rag_domain_name?: string | null
-          rag_expert_name?: string | null
-          rag_status?: string | null
-          rag_updated_at?: string | null
           system_prompt?: string | null
           temperature?: number | null
           total_earnings?: number | null
@@ -245,94 +189,6 @@ export type Database = {
           },
         ]
       }
-      documents: {
-        Row: {
-          client_name: string | null
-          created_by: string | null
-          document_link: string
-          domain: string
-          id: string
-          included_in_default: boolean
-          name: string
-          openai_file_id: string | null
-        }
-        Insert: {
-          client_name?: string | null
-          created_by?: string | null
-          document_link: string
-          domain: string
-          id?: string
-          included_in_default?: boolean
-          name: string
-          openai_file_id?: string | null
-        }
-        Update: {
-          client_name?: string | null
-          created_by?: string | null
-          document_link?: string
-          domain?: string
-          id?: string
-          included_in_default?: boolean
-          name?: string
-          openai_file_id?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "fk_domain"
-            columns: ["domain"]
-            isOneToOne: false
-            referencedRelation: "domains"
-            referencedColumns: ["domain_name"]
-          },
-        ]
-      }
-      domains: {
-        Row: {
-          domain_name: string
-          expert_names: string[] | null
-          id: string
-        }
-        Insert: {
-          domain_name: string
-          expert_names?: string[] | null
-          id?: string
-        }
-        Update: {
-          domain_name?: string
-          expert_names?: string[] | null
-          id?: string
-        }
-        Relationships: []
-      }
-      experts: {
-        Row: {
-          context: string
-          domain: string
-          id: string
-          name: string
-        }
-        Insert: {
-          context: string
-          domain: string
-          id?: string
-          name: string
-        }
-        Update: {
-          context?: string
-          domain?: string
-          id?: string
-          name?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "fk_domain"
-            columns: ["domain"]
-            isOneToOne: false
-            referencedRelation: "domains"
-            referencedColumns: ["domain_name"]
-          },
-        ]
-      }
       knowledge: {
         Row: {
           clone_id: string
@@ -340,19 +196,16 @@ export type Database = {
           content_type: string
           created_at: string | null
           description: string | null
-          embedding_metadata: Json | null
           file_name: string | null
           file_size_bytes: number | null
           file_type: string | null
           file_url: string | null
           id: string
           metadata: Json | null
-          openai_file_id: string | null
           original_url: string | null
           tags: string[] | null
           title: string
           updated_at: string | null
-          vector_store_status: string | null
         }
         Insert: {
           clone_id: string
@@ -360,19 +213,16 @@ export type Database = {
           content_type: string
           created_at?: string | null
           description?: string | null
-          embedding_metadata?: Json | null
           file_name?: string | null
           file_size_bytes?: number | null
           file_type?: string | null
           file_url?: string | null
           id?: string
           metadata?: Json | null
-          openai_file_id?: string | null
           original_url?: string | null
           tags?: string[] | null
           title: string
           updated_at?: string | null
-          vector_store_status?: string | null
         }
         Update: {
           clone_id?: string
@@ -380,19 +230,16 @@ export type Database = {
           content_type?: string
           created_at?: string | null
           description?: string | null
-          embedding_metadata?: Json | null
           file_name?: string | null
           file_size_bytes?: number | null
           file_type?: string | null
           file_url?: string | null
           id?: string
           metadata?: Json | null
-          openai_file_id?: string | null
           original_url?: string | null
           tags?: string[] | null
           title?: string
           updated_at?: string | null
-          vector_store_status?: string | null
         }
         Relationships: [
           {
@@ -686,56 +533,6 @@ export type Database = {
         }
         Relationships: []
       }
-      vector_stores: {
-        Row: {
-          batch_ids: string[] | null
-          client_name: string | null
-          created_at: string | null
-          domain_name: string
-          expert_name: string | null
-          file_ids: string[] | null
-          id: string
-          latest_batch_id: string | null
-          owner: string
-          updated_at: string | null
-          vector_id: string
-        }
-        Insert: {
-          batch_ids?: string[] | null
-          client_name?: string | null
-          created_at?: string | null
-          domain_name: string
-          expert_name?: string | null
-          file_ids?: string[] | null
-          id?: string
-          latest_batch_id?: string | null
-          owner: string
-          updated_at?: string | null
-          vector_id: string
-        }
-        Update: {
-          batch_ids?: string[] | null
-          client_name?: string | null
-          created_at?: string | null
-          domain_name?: string
-          expert_name?: string | null
-          file_ids?: string[] | null
-          id?: string
-          latest_batch_id?: string | null
-          owner?: string
-          updated_at?: string | null
-          vector_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "fk_domain"
-            columns: ["domain_name"]
-            isOneToOne: false
-            referencedRelation: "domains"
-            referencedColumns: ["domain_name"]
-          },
-        ]
-      }
     }
     Views: {
       [_ in never]: never
@@ -820,57 +617,3 @@ export type TablesUpdate<
       : never
     : never
 
-// Legacy RAG API Response Types for backward compatibility
-export interface RAGProcessingResponse {
-  status: 'success' | 'failed'
-  message: string
-  clone_id?: string
-  assistant_id?: string
-  vector_store_id?: string
-  processed_documents?: number
-  error?: string
-}
-
-export interface RAGQueryResponse {
-  response: { text: string }
-  thread_id?: string
-  assistant_id?: string
-  sources?: string[]
-  confidence?: number
-  clone_id: string
-  query?: string
-  timestamp?: string
-}
-
-export interface RAGError {
-  type: 'configuration' | 'processing' | 'validation' | 'connection' | 'auth'
-  message: string
-  suggestion?: string
-  retryable: boolean
-}
-
-export interface RAGHealthCheckResponse {
-  rag_ready: boolean
-  status: 'healthy' | 'error' | 'unhealthy'
-  message: string
-  openai_api_key_configured: boolean
-  openai_client_initialized: boolean
-  supabase_configured: boolean
-  issues?: string[]
-  solutions?: string[]
-  timestamp: string
-  error?: string
-}
-
-export interface ProcessingStatus {
-  clone_id: string
-  status: 'pending' | 'processing' | 'completed' | 'failed' | 'no_documents'
-  completed_documents: number
-  total_documents: number
-  processing_documents: number
-  failed_documents: number
-  progress_percentage: number
-  expert_name?: string
-  assistant_id?: string
-  error_message?: string
-}

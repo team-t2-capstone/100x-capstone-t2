@@ -56,10 +56,9 @@
     "next": "15.2.4",
     "next-themes": "^0.4.4",
     "openai": "^5.12.2",
-    "playwright": "^1.54.2",
-    "react": "^19",
+    "react": ">=16.8.0",
     "react-day-picker": "9.8.0",
-    "react-dom": "^19",
+    "react-dom": ">=16.8.0",
     "react-dropzone": "^14.3.8",
     "react-hook-form": "^7.54.1",
     "react-resizable-panels": "^2.1.7",
@@ -75,9 +74,11 @@
     "react-dom": ">=16.8.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.54.2",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "playwright": "^1.54.2",
     "postcss": "^8.5",
     "tailwindcss": "^3.4.17",
     "typescript": "^5"

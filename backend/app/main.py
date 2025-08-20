@@ -19,12 +19,8 @@ from app.config import settings, validate_settings
 from app.database import init_database, close_database, test_all_connections, db_manager
 from app.core.security import get_security_headers
 
-# Import RAG services (direct integration)
-# from app.services.rag_client import initialize_rag_client  # No longer needed with direct integration
-
 # Import API routers
-from app.api import clones, knowledge, users, discovery, rag, sessions, chat, memory, summarization, analytics, billing, ai_chat, chat_websocket, webrtc, voice_video_calls
-from app.api.v1 import clones_process_knowledge
+from app.api import clones, users, discovery, sessions, chat, memory, summarization, analytics, billing, ai_chat, chat_websocket, webrtc, voice_video_calls, documents
 
 # Import auth conditionally
 try:
@@ -80,8 +76,6 @@ async def lifespan(app: FastAPI):
         # await init_redis()
         logger.info("Redis connection ready")
         
-        # Initialize RAG service (direct integration - no initialization needed)
-        logger.info("RAG service ready (direct integration)")
         
         logger.info("All services initialized successfully")
         
@@ -137,10 +131,9 @@ if AUTH_AVAILABLE and auth:
 app.include_router(ai_chat.router, prefix=settings.API_V1_STR)  # AI chat endpoints
 app.include_router(chat_websocket.router, prefix=settings.API_V1_STR)  # WebSocket chat
 app.include_router(clones.router, prefix=settings.API_V1_STR)
-app.include_router(knowledge.router, prefix=settings.API_V1_STR)
+app.include_router(documents.router, prefix=settings.API_V1_STR, tags=["documents"])
 app.include_router(users.router, prefix=settings.API_V1_STR)
 app.include_router(discovery.router, prefix=settings.API_V1_STR)
-app.include_router(rag.router, prefix=settings.API_V1_STR)
 app.include_router(sessions.router, prefix=settings.API_V1_STR)
 app.include_router(chat.router, prefix=settings.API_V1_STR)
 app.include_router(memory.router, prefix=settings.API_V1_STR)
@@ -149,7 +142,6 @@ app.include_router(analytics.router, prefix=settings.API_V1_STR)
 app.include_router(billing.router, prefix=settings.API_V1_STR)
 app.include_router(webrtc.router, prefix=settings.API_V1_STR)
 app.include_router(voice_video_calls.router, prefix=settings.API_V1_STR)
-app.include_router(clones_process_knowledge.router, prefix=settings.API_V1_STR)
 
 # Health check endpoints
 @app.get("/health")
@@ -213,36 +205,6 @@ async def detailed_health_check() -> Dict[str, Any]:
         health_status["services"]["supabase"] = {
             "status": "unhealthy",
             "message": f"Supabase client error: {str(e)}"
-        }
-    
-    # Check Clean RAG service
-    try:
-        from app.services.rag import CleanRAGService
-        rag_service = CleanRAGService()
-        rag_health = await rag_service.get_health_status()
-        
-        if rag_health.is_healthy:
-            health_status["services"]["rag"] = {
-                "status": "healthy",
-                "message": "Clean RAG service ready and configured",
-                "openai_configured": rag_health.openai_configured,
-                "supabase_configured": rag_health.supabase_configured,
-                "vector_stores_active": rag_health.vector_stores_active,
-                "assistants_active": rag_health.assistants_active,
-                "last_check": rag_health.last_check
-            }
-        else:
-            health_status["services"]["rag"] = {
-                "status": "unhealthy",
-                "message": "Clean RAG service has configuration issues",
-                "openai_configured": rag_health.openai_configured,
-                "supabase_configured": rag_health.supabase_configured,
-                "issues": rag_health.issues
-            }
-    except Exception as e:
-        health_status["services"]["rag"] = {
-            "status": "unhealthy",
-            "message": f"Clean RAG service check failed: {str(e)}"
         }
     
     # Check Redis (placeholder)

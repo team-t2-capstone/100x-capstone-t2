@@ -18,7 +18,6 @@ import structlog
 
 from app.models.database import ChatSession, ChatMessage, Clone, UserProfile
 from app.services.openai_service import openai_service
-from app.services.rag_workflow_wrapper import rag_workflow
 from app.database import get_db_session
 
 logger = structlog.get_logger()
@@ -236,29 +235,8 @@ class ChatService:
                        session_id=session_id,
                        message_length=len(user_message))
             
-            # Step 1: Search knowledge base for relevant context using RAG workflow
+            # Step 1: Search knowledge base for relevant context - RAG functionality removed
             knowledge_context = []
-            if len(user_message.strip()) > 10:  # Only search for substantial queries
-                try:
-                    # Use RAG workflow to query the clone's knowledge base
-                    rag_response = await rag_workflow.query_clone_expert(
-                        clone_id=clone_id,
-                        user_query=user_message,
-                        user_id=None  # User ID not available in this context
-                    )
-                    
-                    # Extract context from RAG response
-                    if rag_response and "response" in rag_response:
-                        knowledge_context = [
-                            {
-                                "content": rag_response["response"][:500],  # Limit context length
-                                "source": "RAG Knowledge Base",
-                                "similarity": 1.0  # RAG responses are highly relevant
-                            }
-                        ]
-                except Exception as e:
-                    logger.warning("RAG query failed", error=str(e))
-                    knowledge_context = []
             
             # Step 2: Build conversation context
             conversation_context = []

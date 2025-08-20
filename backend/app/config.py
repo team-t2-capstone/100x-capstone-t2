@@ -43,18 +43,13 @@ class Settings(BaseSettings):
     OPENAI_ORG_ID: Optional[str] = None
     GPT_4_MODEL: str = "gpt-4-turbo-preview"
     GPT_4_MINI_MODEL: str = "gpt-4o-mini"
-    EMBEDDING_MODEL: str = "text-embedding-3-large"
     
-    # RAG API settings - direct integration 
-    RAG_API_BASE_URL: Optional[str] = None
-    RAG_API_KEY: Optional[str] = None
-    LLAMAPARSE_API_KEY: Optional[str] = None  # LlamaParse for document processing
     
     # Redis settings (for caching and background tasks)
     REDIS_URL: str = "redis://localhost:6379"
     
     # CORS settings - comma-separated string in .env, parsed to list
-    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:3001,https://cloneai.vercel.app"
+    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001,http://localhost:8000,http://127.0.0.1:8000,https://cloneai.vercel.app"
     
     @property
     def cors_origins_list(self) -> List[str]:

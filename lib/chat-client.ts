@@ -81,7 +81,7 @@ export class ChatClient {
       throw new Error('Authentication token required')
     }
 
-    const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001'}/api/v1/chat/ws/${this.sessionId}?token=${accessToken}`
+    const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'}/api/v1/chat/ws/${this.sessionId}?token=${accessToken}`
     
     return new Promise((resolve, reject) => {
       try {
@@ -248,7 +248,7 @@ export class ChatClient {
 export async function createChatSession(cloneId: string, title?: string): Promise<ChatSession> {
   const { accessToken } = getAuthTokens()
   
-  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'}/api/v1/chat/sessions`, {
+  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/chat/sessions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -271,7 +271,7 @@ export async function getChatHistory(sessionId: string, limit: number = 50): Pro
 }> {
   const { accessToken } = getAuthTokens()
   
-  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'}/api/v1/chat/sessions/${sessionId}/history?limit=${limit}`, {
+  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/chat/sessions/${sessionId}/history?limit=${limit}`, {
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${accessToken}`
@@ -306,7 +306,7 @@ export async function getUserChatSessions(limit: number = 20): Promise<{
 }> {
   const { accessToken } = getAuthTokens()
   
-  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'}/api/v1/chat/sessions?limit=${limit}`, {
+  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/chat/sessions?limit=${limit}`, {
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${accessToken}`
@@ -327,7 +327,7 @@ export async function getUserChatSessions(limit: number = 20): Promise<{
 export async function deleteChatSession(sessionId: string): Promise<void> {
   const { accessToken } = getAuthTokens()
   
-  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'}/api/v1/chat/sessions/${sessionId}`, {
+  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/chat/sessions/${sessionId}`, {
     method: 'DELETE',
     headers: {
       'Authorization': `Bearer ${accessToken}`

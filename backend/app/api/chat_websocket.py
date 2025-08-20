@@ -329,7 +329,7 @@ async def get_chat_test_page():
                     return;
                 }
                 
-                ws = new WebSocket(`ws://localhost:8001/api/v1/chat/ws/${sessionId}?token=${token}`);
+                ws = new WebSocket(`ws://localhost:8000/api/v1/chat/ws/${sessionId}?token=${token}`);
                 
                 ws.onopen = () => {
                     addMessage('Connected to chat WebSocket', 'system');

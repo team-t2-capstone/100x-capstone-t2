@@ -20,7 +20,7 @@ import { useAuth } from '@/contexts/auth-context';
 import { getAuthTokens } from '@/lib/api-client';
 import { setupStorageBuckets, checkStorageBuckets } from '@/lib/setup-storage';
 import { toast } from '@/components/ui/use-toast';
-import { EnhancedProcessingMonitor } from '@/components/processing/enhanced-processing-monitor';
+// Removed: EnhancedProcessingMonitor import (RAG functionality removed)
 import { EnhancedDocumentUpload } from '@/components/document-upload/enhanced-document-upload';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -2828,8 +2828,8 @@ INSTRUCTIONS:
               </TabsContent>
             </Tabs>
 
-            {/* Enhanced RAG Processing Status */}
-            {(formData.documents.length > 0 || formData.links.length > 0 || 
+            {/* Enhanced RAG Processing Status - Hidden (RAG functionality removed) */}
+            {false && (formData.documents.length > 0 || formData.links.length > 0 || 
               (formData.existingDocuments && formData.existingDocuments.length > 0) ||
               (formData.existingLinks && formData.existingLinks.length > 0)) && (
               <div className="mt-6">

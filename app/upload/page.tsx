@@ -9,8 +9,8 @@ import { Upload, FileText, BarChart3, Search } from 'lucide-react'
 
 import { DocumentUpload } from '@/components/upload/document-upload'
 import { DocumentManager } from '@/components/upload/document-manager'
-import { ProcessingMonitor } from '@/components/processing/processing-monitor'
-import { KnowledgeSearch } from '@/components/search/knowledge-search'
+// Removed: ProcessingMonitor import (RAG functionality removed)
+// Removed: KnowledgeSearch import (RAG functionality removed)
 import { useAuth } from '@/contexts/auth-context'
 import { useEffect } from 'react'
 import { createClient } from '@/utils/supabase/client'
@@ -221,20 +221,17 @@ export default function UploadPage() {
           </TabsContent>
 
           <TabsContent value="processing" className="space-y-6">
-            <ProcessingMonitor 
-              cloneId={selectedCloneId}
-              refreshInterval={5000}
-            />
+            {/* ProcessingMonitor removed - RAG functionality no longer available */}
+            <div className="flex items-center justify-center p-8 text-gray-500">
+              <p>Processing monitor is currently unavailable.</p>
+            </div>
           </TabsContent>
 
           <TabsContent value="search" className="space-y-6">
-            <KnowledgeSearch 
-              cloneId={selectedCloneId}
-              onResultSelect={(result) => {
-                console.log('Selected result:', result)
-                // Could open a modal or navigate to document
-              }}
-            />
+            {/* KnowledgeSearch removed - RAG functionality no longer available */}
+            <div className="flex items-center justify-center p-8 text-gray-500">
+              <p>Knowledge search is currently unavailable.</p>
+            </div>
           </TabsContent>
 
           <TabsContent value="stats" className="space-y-6">

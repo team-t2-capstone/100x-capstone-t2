@@ -175,7 +175,7 @@ export class WebRTCClient {
   private async connectSignaling(): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001'}/api/v1/webrtc/signal/${this.config.roomId}`;
+        const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'}/api/v1/webrtc/signal/${this.config.roomId}`;
         this.websocket = new WebSocket(wsUrl);
 
         this.websocket.onopen = async () => {

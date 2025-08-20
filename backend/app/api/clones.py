@@ -13,8 +13,7 @@ from app.database import get_supabase, get_service_supabase
 from app.core.supabase_auth import get_current_user_id, security
 from app.models.schemas import (
     CloneCreate, CloneUpdate, CloneResponse, CloneListResponse,
-    PaginationInfo, DocumentProcessingRequest, KnowledgeProcessingStatus,
-    RAGQueryRequest, RAGQueryResponse
+    PaginationInfo, DocumentProcessingRequest, KnowledgeProcessingStatus
 )
 
 logger = structlog.get_logger()
@@ -1247,138 +1246,6 @@ async def get_processing_status(
         )
 
 
-@router.post("/{clone_id}/query", response_model=RAGQueryResponse)
-async def query_clone_expert(
-    clone_id: str,
-    request: RAGQueryRequest,
-    use_enhanced_rag: bool = Query(default=False, description="Use enhanced RAG with hybrid search"),
-    search_strategy: Optional[str] = Query(default="hybrid", description="Search strategy: vector, keyword, or hybrid"),
-    top_k: int = Query(default=5, ge=1, le=10, description="Number of top results to retrieve"),
-    current_user_id: str = Depends(get_current_user_id)
-) -> RAGQueryResponse:
-    """
-    Query a clone's RAG expert for testing and chat with optional enhanced RAG features
-    """
-    try:
-        # Use service role client for administrative operations
-        service_supabase = get_service_supabase()
-        if not service_supabase:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Service role client not available"
-            )
-        
-        # Check if clone exists
-        response = service_supabase.table("clones").select("*").eq("id", clone_id).execute()
-        
-        if not response.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Clone not found"
-            )
-        
-        clone_data = response.data[0]
-        
-        # Check access permissions
-        if not clone_data.get("is_published") and clone_data.get("creator_id") != current_user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to query this clone"
-            )
-        
-        # Use enhanced RAG if requested and available
-        if use_enhanced_rag and clone_data.get("rag_status") in ["completed", "enhanced"]:
-            try:
-                from app.services.rag import clean_rag_service
-                from app.services.rag.models import QueryRequest
-                
-                logger.info(f"Using CleanRAG service for clone {clone_id}")
-                
-                query_request = QueryRequest(
-                    clone_id=clone_id,
-                    query=request.query,
-                    max_tokens=1000,
-                    temperature=0.7
-                )
-                
-                rag_result = await clean_rag_service.query_clone(query_request)
-                
-                # Convert to expected format
-                result = {
-                    "status": "success" if rag_result.response else "failed",
-                    "response": {"text": rag_result.response},
-                    "thread_id": rag_result.thread_id,
-                    "assistant_id": rag_result.assistant_id,
-                    "sources": getattr(rag_result, 'sources', []),
-                    "confidence": getattr(rag_result, 'confidence', 0.8)
-                }
-                
-                if result.get("status") == "failed":
-                    logger.warning(f"Enhanced RAG failed for clone {clone_id}, falling back to standard RAG")
-                    use_enhanced_rag = False
-                else:
-                    # Return enhanced RAG response
-                    return RAGQueryResponse(
-                        response=result["response"]["text"],
-                        citations=result.get("citations", []),
-                        metadata={
-                            "search_strategy": result["search_strategy_used"],
-                            "search_results_count": result["search_results_count"],
-                            "response_time_ms": result["response_time_ms"],
-                            "thread_id": result.get("thread_id"),
-                            "rag_type": "enhanced"
-                        }
-                    )
-                    
-            except Exception as e:
-                logger.warning(f"Enhanced RAG failed for clone {clone_id}: {str(e)}, falling back to standard RAG")
-                use_enhanced_rag = False
-        
-        # Standard RAG processing (fallback or default)
-        # Check if clone has been processed with standard RAG
-        if not clone_data.get("rag_expert_name"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Clone knowledge has not been processed yet"
-            )
-        
-        if clone_data.get("document_processing_status") != "completed":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Clone knowledge processing is not complete"
-            )
-        
-        # Query the expert using direct RAG integration
-        clone_name = clone_data.get("name", "Unknown Clone")
-        
-        result = await query_clone_expert(
-            clone_id=clone_id,
-            clone_name=clone_name,
-            query=request.query,
-            memory_type=request.memory_type
-        )
-        
-        # Format response
-        response_text = result.get("response", {}).get("text", result.get("response", ""))
-        if isinstance(response_text, dict):
-            response_text = response_text.get("text", str(response_text))
-        
-        return RAGQueryResponse(
-            response=str(response_text),
-            thread_id=result.get("thread_id"),
-            assistant_id=result.get("assistant_id"),
-            citations=result.get("citations"),
-            error=result.get("error")
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Clone query failed", error=str(e), clone_id=clone_id)
-        return RAGQueryResponse(
-            response=f"I'm sorry, I'm currently unable to process your question. Error: {str(e)}",
-            error=str(e)
-        )
 
 
 @router.post("/cleanup/orphaned-data")
@@ -1482,9 +1349,13 @@ async def retry_failed_processing(
     current_user_id: str = Depends(get_current_user_id)
 ) -> dict:
     """
-    Retry processing for failed documents
+    Retry processing for failed documents by fetching existing documents and triggering RAG processing
     """
     try:
+        # Import necessary modules for RAG processing
+        from app.services.rag import clean_rag_service
+        from app.services.rag.models import DocumentInfo
+        
         # Use service role client for administrative operations
         service_supabase = get_service_supabase()
         if not service_supabase:
@@ -1492,6 +1363,10 @@ async def retry_failed_processing(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Service role client not available"
             )
+        
+        logger.info("Starting retry processing workflow", 
+                   clone_id=clone_id, 
+                   user_id=current_user_id)
         
         # First check if clone exists and user owns it
         response = service_supabase.table("clones").select("*").eq("id", clone_id).execute()
@@ -1515,7 +1390,8 @@ async def retry_failed_processing(
         current_status = clone_data.get("document_processing_status")
         logger.info("Retry processing requested", 
                    clone_id=clone_id, 
-                   current_status=current_status)
+                   current_status=current_status,
+                   clone_name=clone_data.get("name"))
         
         # Allow retry for failed, partial, or even completed/pending states
         # This provides more flexibility for users experiencing issues
@@ -1527,35 +1403,280 @@ async def retry_failed_processing(
                 "clone_id": clone_id
             }
         
-        # For all other states (failed, partial, completed, pending), allow retry
-        # This ensures users can always attempt to reprocess their documents
+        # Step 1: Fetch documents from the knowledge table for this clone_id
+        logger.debug("Fetching documents from knowledge table", clone_id=clone_id)
         
-        # Reset processing status to pending for retry
+        knowledge_response = service_supabase.table("knowledge").select(
+            "id, title, file_url, original_url, content_type, file_name, description, content_preview, metadata"
+        ).eq("clone_id", clone_id).execute()
+        
+        if not knowledge_response.data:
+            logger.warning("No documents found in knowledge table for clone", 
+                          clone_id=clone_id)
+            
+            # Still reset status to pending in case user wants to re-upload documents
+            update_data = {
+                "document_processing_status": "pending",
+                "rag_status": "pending",
+                "updated_at": datetime.utcnow().isoformat()
+            }
+            service_supabase.table("clones").update(update_data).eq("id", clone_id).execute()
+            
+            return {
+                "status": "no_documents",
+                "message": "No documents found to retry processing. Please upload documents first.",
+                "clone_id": clone_id,
+                "documents_found": 0
+            }
+        
+        documents_found = len(knowledge_response.data)
+        logger.info("Documents found for retry processing", 
+                   clone_id=clone_id, 
+                   documents_count=documents_found)
+        
+        # Step 2: Convert knowledge records to DocumentInfo objects
+        document_list = []
+        url_based_items = 0
+        content_based_items = 0
+        
+        for knowledge_item in knowledge_response.data:
+            # Check for URL-based content first
+            document_url = knowledge_item.get("file_url") or knowledge_item.get("original_url")
+            content_preview = knowledge_item.get("content_preview")
+            
+            doc_name = knowledge_item.get("title") or knowledge_item.get("file_name") or f"Document_{knowledge_item.get('id')[:8]}"
+            content_type = knowledge_item.get("content_type", "document")
+            
+            if document_url:
+                # URL-based knowledge item (existing logic)
+                document_info = DocumentInfo(
+                    name=doc_name,
+                    url=document_url,
+                    content_type=content_type
+                )
+                document_list.append(document_info)
+                url_based_items += 1
+                
+                logger.debug("Added URL-based document for processing", 
+                            name=doc_name,
+                            url=document_url[:100] + "..." if len(document_url) > 100 else document_url,
+                            content_type=content_type)
+                            
+            elif content_preview:
+                # Content-based knowledge item - upload to Supabase storage for processing
+                try:
+                    import time
+                    from uuid import uuid4
+                    
+                    # Create unique temporary filename in Supabase storage
+                    temp_filename = f"temp_content_{knowledge_item.get('id')[:8]}_{int(time.time())}_{uuid4().hex[:8]}.txt"
+                    temp_path = f"temp-documents/{clone_id}/{temp_filename}"
+                    
+                    logger.debug("Uploading content to Supabase storage for processing", 
+                                name=doc_name,
+                                content_length=len(content_preview),
+                                temp_path=temp_path)
+                    
+                    # Upload content to Supabase storage as temporary file
+                    storage_response = service_supabase.storage.from_("knowledge-documents").upload(
+                        temp_path, 
+                        content_preview.encode('utf-8'), 
+                        file_options={"content-type": "text/plain"}
+                    )
+                    
+                    if storage_response:
+                        # Get public URL for processing
+                        temp_url = service_supabase.storage.from_("knowledge-documents").get_public_url(temp_path)
+                        
+                        document_info = DocumentInfo(
+                            name=doc_name,
+                            url=temp_url,
+                            content_type="text"
+                        )
+                        # Track temporary storage path for cleanup
+                        document_info._temp_storage_path = temp_path
+                        document_list.append(document_info)
+                        content_based_items += 1
+                        
+                        logger.debug("Added content-based document for processing", 
+                                    name=doc_name,
+                                    content_length=len(content_preview),
+                                    temp_url=temp_url[:100] + "..." if len(temp_url) > 100 else temp_url)
+                    else:
+                        logger.warning("Failed to upload content to Supabase storage", 
+                                      knowledge_id=knowledge_item.get("id"),
+                                      title=doc_name)
+                        continue
+                    
+                except Exception as temp_error:
+                    logger.warning("Failed to create temporary content in Supabase storage", 
+                                  knowledge_id=knowledge_item.get("id"),
+                                  title=doc_name,
+                                  error=str(temp_error))
+                    continue
+            else:
+                logger.warning("Knowledge item has no URL or content, skipping", 
+                              knowledge_id=knowledge_item.get("id"),
+                              title=doc_name,
+                              has_url=bool(document_url),
+                              has_content=bool(content_preview))
+                continue
+        
+        if not document_list:
+            logger.error("No valid documents found with URLs or content", clone_id=clone_id)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid documents found with accessible URLs or content for processing"
+            )
+        
+        logger.info("Prepared documents for RAG processing", 
+                   clone_id=clone_id, 
+                   valid_documents=len(document_list),
+                   url_based_items=url_based_items,
+                   content_based_items=content_based_items)
+        
+        # Initialize cleanup tracking before processing
+        temp_storage_paths = []
+        for doc_info in document_list:
+            if hasattr(doc_info, '_temp_storage_path'):
+                temp_storage_paths.append(doc_info._temp_storage_path)
+        
+        # Step 3: Reset processing status to pending and processing
         update_data = {
-            "document_processing_status": "pending",
-            "rag_status": "pending",
+            "document_processing_status": "processing",
+            "rag_status": "processing",
             "updated_at": datetime.utcnow().isoformat()
         }
-        
         service_supabase.table("clones").update(update_data).eq("id", clone_id).execute()
+        logger.info("Clone status updated to processing", clone_id=clone_id)
         
-        logger.info("Clone processing retry initiated", 
-                   clone_id=clone_id,
-                   previous_status=current_status)
-        
-        return {
-            "status": "success",
-            "message": "Processing retry initiated successfully. Documents will be reprocessed.",
-            "clone_id": clone_id,
-            "previous_status": current_status,
-            "new_status": "pending"
-        }
+        # Step 4: Trigger CleanRAGService processing
+        try:
+            logger.info("Starting CleanRAG document processing", 
+                       clone_id=clone_id,
+                       documents_to_process=len(document_list))
+            
+            # Process using CleanRAGService
+            processing_result = await clean_rag_service.process_clone_documents(
+                clone_id=clone_id,
+                documents=document_list
+            )
+            
+            # Clean up temporary storage files after processing
+            for temp_path in temp_storage_paths:
+                try:
+                    cleanup_response = service_supabase.storage.from_("knowledge-documents").remove([temp_path])
+                    logger.debug("Cleaned up temporary storage file", temp_path=temp_path)
+                except Exception as cleanup_error:
+                    logger.warning("Failed to cleanup temporary storage file", 
+                                 temp_path=temp_path,
+                                 error=str(cleanup_error))
+            
+            logger.info("CleanRAG processing completed", 
+                       clone_id=clone_id,
+                       status=processing_result.status.value,
+                       processed_docs=processing_result.processed_documents,
+                       failed_docs=processing_result.failed_documents)
+            
+            # Step 5: Update clone status based on processing result
+            if processing_result.status.value == "completed":
+                final_update_data = {
+                    "document_processing_status": "completed",
+                    "rag_status": "completed",
+                    "rag_assistant_id": processing_result.assistant_id,
+                    "updated_at": datetime.utcnow().isoformat()
+                }
+                
+                success_message = f"Processing retry completed successfully. Processed {processing_result.processed_documents} documents."
+                
+                if processing_result.failed_documents > 0:
+                    success_message += f" {processing_result.failed_documents} documents failed processing."
+                    final_update_data["document_processing_status"] = "partial"
+                    
+            else:
+                # Processing failed
+                final_update_data = {
+                    "document_processing_status": "failed",
+                    "rag_status": "failed", 
+                    "updated_at": datetime.utcnow().isoformat()
+                }
+                success_message = f"Processing retry failed: {processing_result.error_message or 'Unknown error'}"
+            
+            service_supabase.table("clones").update(final_update_data).eq("id", clone_id).execute()
+            
+            logger.info("Clone processing retry completed", 
+                       clone_id=clone_id,
+                       previous_status=current_status,
+                       final_status=final_update_data["document_processing_status"])
+            
+            return {
+                "status": "success" if processing_result.status.value == "completed" else "failed",
+                "message": success_message,
+                "clone_id": clone_id,
+                "previous_status": current_status,
+                "new_status": final_update_data["document_processing_status"],
+                "documents_found": documents_found,
+                "url_based_documents": url_based_items,
+                "content_based_documents": content_based_items,
+                "documents_processed": processing_result.processed_documents,
+                "documents_failed": processing_result.failed_documents,
+                "assistant_id": processing_result.assistant_id,
+                "processing_time_seconds": processing_result.processing_time_seconds
+            }
+            
+        except Exception as processing_error:
+            # If processing fails, update clone status to failed
+            logger.error("RAG processing failed during retry", 
+                        error=str(processing_error), 
+                        clone_id=clone_id)
+            
+            # Clean up any temporary storage files on failure
+            if 'temp_storage_paths' in locals():
+                for temp_path in temp_storage_paths:
+                    try:
+                        service_supabase.storage.from_("knowledge-documents").remove([temp_path])
+                        logger.debug("Cleaned up temporary storage file on failure", temp_path=temp_path)
+                    except Exception as cleanup_error:
+                        logger.debug("Failed to cleanup temporary storage file", 
+                                   temp_path=temp_path, error=str(cleanup_error))
+            
+            failed_update_data = {
+                "document_processing_status": "failed",
+                "rag_status": "failed",
+                "updated_at": datetime.utcnow().isoformat()
+            }
+            service_supabase.table("clones").update(failed_update_data).eq("id", clone_id).execute()
+            
+            return {
+                "status": "failed",
+                "message": f"Processing retry failed due to RAG processing error: {str(processing_error)}",
+                "clone_id": clone_id,
+                "previous_status": current_status,
+                "new_status": "failed",
+                "documents_found": documents_found,
+                "url_based_documents": url_based_items,
+                "content_based_documents": content_based_items,
+                "error": str(processing_error)
+            }
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error("Failed to retry processing", error=str(e), clone_id=clone_id)
+        
+        # Try to reset clone status to failed if possible
+        try:
+            service_supabase = get_service_supabase()
+            if service_supabase:
+                service_supabase.table("clones").update({
+                    "document_processing_status": "failed",
+                    "rag_status": "failed",
+                    "updated_at": datetime.utcnow().isoformat()
+                }).eq("id", clone_id).execute()
+        except:
+            pass  # Don't fail on status update failure
+            
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retry processing"
+            detail=f"Failed to retry processing: {str(e)}"
         )
