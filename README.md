@@ -1,349 +1,402 @@
-# AI Clone Platform - Frontend Documentation
+# 100x Capstone T2 - AI Clone Platform
 
-## Overview
-This is the frontend application for the AI Clone Platform, built with **Next.js 15**, **React 19**, **TypeScript**, and **Tailwind CSS**. The platform allows users to interact with AI versions of experts through chat, voice, and video sessions.
+## 🚀 Overview
+A comprehensive AI Clone Platform that enables users to create, interact with, and monetize AI versions of experts. Built with modern technologies including Next.js 15, React 19, TypeScript, and a powerful Python FastAPI backend with RAG integration.
 
-## 🚀 Quick Start
+## 🏗️ Architecture
 
-### Prerequisites
-- Node.js 18+ 
-- npm/pnpm/yarn
+### Frontend (Next.js)
+- **Framework**: Next.js 15 with App Router
+- **UI**: React 19 + TypeScript + Tailwind CSS
+- **Components**: shadcn/ui component library (43+ components)
+- **State**: React hooks + custom state management
+- **Authentication**: Supabase Auth integration
 
-### Installation
-```bash
-# Install dependencies
-npm install
-# or
-pnpm install
+### Backend (FastAPI)
+- **Framework**: Python FastAPI with async support
+- **Database**: Supabase PostgreSQL
+- **AI Integration**: OpenAI GPT models + RAG system
+- **Authentication**: JWT tokens + Supabase Auth
+- **File Storage**: Supabase Storage
+- **Voice/Video**: ElevenLabs integration
 
-# Run development server
-npm run dev
-# or 
-pnpm dev
+### Database (Supabase)
+- **Primary DB**: PostgreSQL with Row Level Security (RLS)
+- **Storage**: Document and media file storage
+- **Real-time**: Supabase Realtime for live updates
+- **Authentication**: Built-in auth with JWT
 
-# Build for production
-npm run build
+## 🎯 Key Features
 
-# Start production server
-npm start
-```
+### 🤖 AI Clone Creation & Management
+- **Multi-step Clone Wizard**: Comprehensive clone creation flow
+- **Document Upload**: RAG-powered knowledge base integration
+- **Voice Training**: Custom voice cloning with ElevenLabs
+- **Testing & Preview**: Real-time clone testing interface
+- **Clone Publishing**: Public/private clone management
 
-### Development Server
-The application will be available at `http://localhost:3000`
+### 💬 Multi-Modal Interactions
+- **Session Pages**: Unified session interface for all interaction types
+- **Text Chat**: Real-time messaging with AI clones
+- **Voice Sessions**: Audio conversations with voice-cloned experts
+- **Video Calls**: Face-to-face interactions (future enhancement)
+- **Category-Aware Responses**: Expert type-specific conversation flows
+
+### 📚 Knowledge Management
+- **Document Upload**: Support for PDF, DOC, TXT, MD files
+- **Duplicate Detection**: Smart duplicate file detection
+- **Document Removal**: Complete cleanup of documents and AI resources
+- **Expert Updates**: Automatic knowledge base refreshing via `/expert/update`
+- **RAG Integration**: Vector search and retrieval augmented generation
+
+### 🏪 Discovery & Marketplace
+- **Expert Discovery**: Browse and filter AI clones by category
+- **Session Navigation**: Direct clone-to-session routing
+- **Expert Profiles**: Detailed clone information and capabilities
+- **Pricing Models**: Flexible pricing for different interaction types
+
+### 🔐 Authentication & Security
+- **User Management**: Secure authentication with Supabase
+- **Row Level Security**: Database-level security policies
+- **JWT Tokens**: Secure API communication
+- **Creator Access Control**: Clone ownership and permissions
 
 ## 📁 Project Structure
 
 ```
-frontend/
-├── app/                    # Next.js App Router pages
-│   ├── chat/[id]/          # Chat interface pages
-│   ├── clone/[id]/         # Expert clone profile pages
-│   ├── create-clone/       # Clone creation flow
-│   ├── dashboard/          # User & creator dashboards
-│   ├── discover/           # Expert discovery page
-│   ├── how-it-works/       # Information pages
-│   ├── pricing/            # Pricing information
-│   ├── profile/            # User profile management
-│   ├── video/[id]/         # Video call interface
-│   ├── voice/[id]/         # Voice call interface
-│   ├── globals.css         # Global styles
-│   ├── layout.tsx          # Root layout
-│   ├── loading.tsx         # Global loading component
-│   └── page.tsx            # Homepage
-├── components/             # Reusable React components
-│   ├── ui/                 # shadcn/ui component library (43+ components)
-│   └── theme-provider.tsx  # Theme context provider
-├── hooks/                  # Custom React hooks
-│   ├── use-mobile.tsx      # Mobile viewport detection
-│   └── use-toast.ts        # Toast notification management
-├── lib/                    # Utility functions
-│   └── utils.ts            # Common utilities (cn, etc.)
-├── public/                 # Static assets
-│   ├── placeholder-logo.png
-│   ├── placeholder-logo.svg
-│   ├── placeholder-user.jpg
-│   ├── placeholder.jpg
-│   └── placeholder.svg
-├── styles/                 # Additional styles
-│   └── globals.css         # Global CSS (duplicate - can be removed)
-├── components.json         # shadcn/ui configuration
-├── next.config.mjs         # Next.js configuration
-├── postcss.config.mjs      # PostCSS configuration
-└── tailwind.config.ts      # Tailwind CSS configuration
+100x-capstone-t2/
+├── app/                        # Next.js App Router pages
+│   ├── session/[id]/          # 🆕 Unified session interface
+│   ├── discover/              # Expert discovery page  
+│   ├── create-clone/wizard/   # Clone creation wizard
+│   ├── upload/                # Document management interface
+│   ├── dashboard/             # User & creator dashboards
+│   ├── profile/               # User profile management
+│   └── ...                    # Other core pages
+├── components/                 # Reusable React components
+│   ├── ui/                    # shadcn/ui component library
+│   ├── document-upload/       # 🆕 Enhanced document upload system
+│   ├── wizard/                # Clone creation components
+│   └── voice-training.tsx     # Voice training interface
+├── backend/                   # Python FastAPI backend
+│   ├── app/
+│   │   ├── api/               # API endpoints
+│   │   │   ├── clones.py      # Clone management (fixed description→bio)
+│   │   │   ├── rag_memory.py  # RAG system integration
+│   │   │   ├── documents.py   # Document management
+│   │   │   └── sessions.py    # Session management
+│   │   ├── services/          # Business logic services
+│   │   │   ├── rag_client.py  # RAG system client (with delete methods)
+│   │   │   └── elevenlabs_service.py # Voice cloning service
+│   │   └── models/            # Database models and schemas
+│   └── requirements.txt       # Python dependencies
+├── hooks/                     # Custom React hooks
+│   ├── use-rag.ts            # RAG system integration
+│   ├── use-billing.ts        # Billing management
+│   └── use-voice-upload.ts   # Voice file management
+├── lib/                      # Utility libraries
+│   ├── clone-api.ts          # Clone API client (fixed bio mapping)
+│   ├── knowledge-api.ts      # Document management API
+│   └── rag-api-client.ts     # RAG system client
+└── ...                       # Configuration files
 ```
+
+## 🆕 Recent Major Updates
+
+### Session Page Implementation
+- **New Route**: `/session/[id]` for unified clone interactions
+- **Multi-Modal Support**: Text, voice, and video modes with dynamic UI
+- **Real-time Features**: Session timing, cost calculation, connection status
+- **Category-Aware**: Different responses based on expert type (medical, business, etc.)
+- **Navigation Update**: Discover page now routes directly to sessions
+
+### Enhanced Document Management
+- **Upload Integration**: Automatic `/expert/update` calls after document uploads
+- **Document Display**: Visual list of existing documents with status indicators
+- **Document Removal**: Complete cleanup including:
+  - File deletion from Supabase Storage
+  - OpenAI vector store removal
+  - AI assistant cleanup
+  - Database record deletion
+- **Error Handling**: Comprehensive error management with user feedback
+
+### Database Schema Fixes
+- **Column Mapping**: Fixed `description` → `bio` column mapping issues
+- **RLS Policies**: Enabled Row Level Security with proper access policies
+- **Data Consistency**: Resolved frontend/backend data mapping inconsistencies
+
+### API Improvements
+- **Document Deletion**: New `DELETE /clones/{id}/documents/{doc_id}` endpoint
+- **Error Resolution**: Fixed 500 errors caused by column name mismatches
+- **Authentication**: Enhanced JWT token validation and user verification
 
 ## 🛠️ Technology Stack
 
-### Core Framework
+### Frontend Technologies
 - **Next.js 15** - React framework with App Router
-- **React 19** - UI library with latest features
-- **TypeScript** - Type-safe JavaScript
-
-### Styling & UI
+- **React 19** - Latest React with concurrent features
+- **TypeScript** - Type-safe JavaScript development
 - **Tailwind CSS** - Utility-first CSS framework
-- **shadcn/ui** - High-quality component library (43+ components)
-- **CSS Custom Properties** - Theme variables for light/dark mode
-- **Framer Motion** - Animation library
+- **shadcn/ui** - High-quality component library
+- **Framer Motion** - Animation and interaction library
+- **Supabase Client** - Database and auth integration
 
-### State Management & Forms
-- **React useState** - Component state management
-- **React Hook Form** - Form handling and validation
-- **Zod** - Schema validation
-- **Custom Hooks** - Reusable stateful logic
+### Backend Technologies
+- **FastAPI** - Modern Python web framework
+- **Supabase** - PostgreSQL database with real-time features
+- **OpenAI API** - GPT models and vector embeddings
+- **ElevenLabs** - Voice cloning and synthesis
+- **Pydantic** - Data validation and serialization
+- **uvicorn** - ASGI server for production deployment
 
-### Icons & Assets
-- **Lucide React** - Icon library
-- **next/image** - Optimized image handling
-- **Geist Font** - Sans and mono typefaces
+### Development Tools
+- **Claude Code** - AI-powered development assistance
+- **ESLint** - Code linting and formatting
+- **Prettier** - Code formatting
+- **Git** - Version control
+- **Supabase CLI** - Database management
 
-## 📱 Key Features
+## 🚀 Quick Start
 
-### User Interface
-- **Responsive Design** - Mobile-first approach
-- **Dark/Light Mode** - Complete theming system
-- **Smooth Animations** - Framer Motion transitions
-- **Accessible Components** - WCAG compliant UI components
-- **Loading States** - Skeleton loaders and loading pages
+### Prerequisites
+- Node.js 18+
+- Python 3.8+
+- Supabase account
+- OpenAI API key
+- ElevenLabs API key (for voice features)
 
-### Navigation & Routing
-- **App Router** - Next.js 13+ routing system
-- **Dynamic Routes** - Expert profiles, chat, video, voice sessions
-- **Nested Layouts** - Shared layouts and loading states
-- **Link Prefetching** - Optimized navigation
+### Installation
 
-### Expert Interaction
-- **Chat Interface** - Text-based conversations with AI experts
-- **Voice Calls** - Audio communication with experts
-- **Video Calls** - Video communication with experts
-- **Expert Discovery** - Browse and filter experts by category
-- **Expert Profiles** - Detailed expert information and specialties
+#### Frontend Setup
+```bash
+# Install dependencies
+npm install
 
-### User Management
-- **User Dashboard** - Session history, favorites, billing
-- **Creator Dashboard** - Analytics, earnings, clone management
-- **Profile Management** - User account settings
-- **Clone Creation** - Multi-step wizard for creating AI clones
+# Set up environment variables
+cp .env.example .env.local
+# Add your Supabase and API keys
 
-## 🎨 Component Library
-
-### shadcn/ui Components (43 total)
-
-#### Form & Input Components
-- **Button** - Multiple variants (default, destructive, outline, secondary, ghost, link)
-- **Input** - Text input with validation states
-- **Textarea** - Multi-line text input
-- **Checkbox** - Custom styled checkboxes
-- **Radio Group** - Radio button selections
-- **Select** - Dropdown select component
-- **Slider** - Range input slider
-- **Switch** - Toggle switches
-- **Form** - Form wrapper with validation
-- **Label** - Form labels
-- **Input OTP** - One-time password input
-
-#### Layout & Navigation
-- **Navigation Menu** - Main navigation component
-- **Menubar** - Menu bar interface
-- **Breadcrumb** - Navigation breadcrumbs
-- **Sidebar** - Collapsible sidebar navigation
-- **Tabs** - Tab navigation interface
-- **Pagination** - Page navigation controls
-
-#### Display Components
-- **Card** - Content containers with header/content/footer
-- **Avatar** - User avatars with fallbacks
-- **Badge** - Status and category badges
-- **Table** - Data tables with sorting
-- **Progress** - Progress bars and indicators
-- **Skeleton** - Loading placeholders
-- **Separator** - Visual separators
-
-#### Interactive Components
-- **Dialog** - Modal dialogs
-- **Alert Dialog** - Confirmation dialogs
-- **Sheet** - Slide-out panels
-- **Drawer** - Bottom sheet drawers
-- **Popover** - Floating content
-- **Hover Card** - Hover-triggered content
-- **Tooltip** - Information tooltips
-- **Dropdown Menu** - Context menus
-- **Context Menu** - Right-click menus
-- **Command** - Command palette interface
-
-#### Feedback Components
-- **Alert** - Notification alerts
-- **Toast** - Toast notifications
-- **Toaster** - Toast container
-- **Sonner** - Advanced toast implementation
-
-#### Advanced Components
-- **Calendar** - Date picker interface
-- **Carousel** - Content carousels
-- **Chart** - Data visualization
-- **Accordion** - Collapsible content
-- **Collapsible** - Toggle content visibility
-- **Aspect Ratio** - Maintain aspect ratios
-- **Resizable** - Resizable panel layouts
-- **Scroll Area** - Custom scrollbars
-- **Toggle** - Toggle buttons
-- **Toggle Group** - Toggle button groups
-
-## 🎯 Page Structure
-
-### Core Pages
-- **Homepage** (`/`) - Landing page with hero, featured experts, categories, testimonials
-- **Discover** (`/discover`) - Expert browsing with filters and search
-- **How It Works** (`/how-it-works`) - Platform explanation and features
-- **Pricing** (`/pricing`) - Pricing plans and session costs
-
-### User Pages
-- **Dashboard** (`/dashboard`) - User session history, favorites, billing
-- **Profile** (`/profile`) - User account management
-
-### Creator Pages
-- **Creator Dashboard** (`/dashboard/creator`) - Creator analytics and earnings
-- **Create Clone** (`/create-clone`) - Clone creation interface
-- **Clone Wizard** (`/create-clone/wizard`) - Step-by-step clone setup
-
-### Interaction Pages
-- **Expert Profile** (`/clone/[id]`) - Individual expert information
-- **Chat Session** (`/chat/[id]`) - Text-based conversations
-- **Voice Session** (`/voice/[id]`) - Audio communication
-- **Video Session** (`/video/[id]`) - Video communication
-
-## 🎨 Theming System
-
-### CSS Custom Properties
-The application uses a comprehensive theming system with CSS custom properties:
-
-```css
-:root {
-  --background: 0 0% 100%;
-  --foreground: 222.2 84% 4.9%;
-  --primary: 222.2 47.4% 11.2%;
-  --primary-foreground: 210 40% 98%;
-  /* ... more theme variables */
-}
-
-.dark {
-  --background: 222.2 84% 4.9%;
-  --foreground: 210 40% 98%;
-  /* ... dark theme variables */
-}
+# Run development server
+npm run dev
 ```
 
-### Theme Provider
-Dark/light mode switching is handled by the `ThemeProvider` component using `next-themes`.
+#### Backend Setup
+```bash
+# Navigate to backend directory
+cd backend
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Set up environment variables
+cp .env.example .env
+# Add your API keys and configuration
+
+# Run backend server
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+#### Database Setup
+```bash
+# Run Supabase migrations (if any)
+# The application will automatically create necessary tables
+```
+
+### Access Points
+- **Frontend**: http://localhost:3000
+- **Backend API**: http://localhost:8000
+- **API Docs**: http://localhost:8000/docs
+
+## 🎯 Core User Flows
+
+### 1. Clone Creation Flow
+1. **Discovery** → Browse existing clones
+2. **Create Clone** → Multi-step wizard interface
+3. **Basic Info** → Name, category, pricing
+4. **Knowledge Upload** → Documents with RAG integration
+5. **Voice Training** → Upload voice samples
+6. **Testing & Preview** → Real-time clone testing
+7. **Publish** → Make clone available
+
+### 2. Session Interaction Flow
+1. **Discover** → Browse available clones
+2. **Select Clone** → Click clone card
+3. **Session Page** → Unified interaction interface
+4. **Choose Mode** → Text, voice, or video
+5. **Interact** → Real-time conversation with cost tracking
+6. **End Session** → Session summary and billing
+
+### 3. Document Management Flow
+1. **Upload Page** → Select clone for document management
+2. **Document Upload** → Drag & drop or file selection
+3. **Duplicate Detection** → Automatic duplicate checking
+4. **Expert Update** → Automatic knowledge base refresh
+5. **Document Removal** → Complete resource cleanup
 
 ## 🔧 Configuration
 
-### Next.js Configuration (`next.config.mjs`)
-```javascript
-const nextConfig = {
-  eslint: { ignoreDuringBuilds: true },
-  typescript: { ignoreBuildErrors: true },
-  images: { unoptimized: true }
-};
+### Environment Variables
+
+#### Frontend (.env.local)
+```bash
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```
 
-### Tailwind Configuration (`tailwind.config.ts`)
-- Custom color palette with CSS variables
-- Extended animations and keyframes
-- Custom border radius values
-- Plugin integrations (tailwindcss-animate)
+#### Backend (.env)
+```bash
+SUPABASE_URL=your_supabase_url
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+OPENAI_API_KEY=your_openai_api_key
+ELEVENLABS_API_KEY=your_elevenlabs_api_key
+RAG_API_BASE_URL=your_rag_system_url
+JWT_SECRET_KEY=your_jwt_secret
+```
 
-### TypeScript Configuration (`tsconfig.json`)
-- Path aliases (`@/` points to root)
-- Next.js optimizations
-- Strict type checking
+### Database Configuration
+The application uses Supabase PostgreSQL with the following key tables:
+- `clones` - Clone definitions and metadata
+- `knowledge` - Document storage and RAG integration
+- `sessions` - User interaction sessions
+- `documents` - RAG system document references
+- `users` - User authentication and profiles
 
-## 📱 Responsive Design
+## 🧪 Testing
 
-### Breakpoints
-- **Mobile**: < 640px
-- **Tablet**: >= 640px (sm)
-- **Laptop**: >= 1024px (lg)
-- **Desktop**: >= 1280px (xl)
+### Manual Testing
+1. **Clone Creation**: Test the complete wizard flow
+2. **Document Upload**: Verify upload, duplicate detection, and removal
+3. **Session Interactions**: Test text, voice, and video modes
+4. **Expert Discovery**: Browse and filter functionality
+5. **Authentication**: Login/logout and access control
 
-### Mobile-First Approach
-All components are designed mobile-first with progressive enhancement for larger screens.
+### API Testing
+- **Backend API**: http://localhost:8000/docs (Swagger UI)
+- **Health Checks**: GET `/health` endpoint
+- **Authentication**: Test JWT token validation
 
-## 🚀 Performance Optimizations
-
-### Next.js Features
-- **App Router** - Server-side rendering and static generation
-- **Image Optimization** - Automatic image optimization
-- **Link Prefetching** - Preload page resources
-- **Code Splitting** - Automatic bundle splitting
-
-### Loading States
-- Global loading component (`app/loading.tsx`)
-- Page-specific loading states
-- Skeleton components for content loading
-
-## 🧪 Development Guidelines
-
-### Component Development
-1. Use TypeScript for all components
-2. Follow shadcn/ui patterns for consistency
-3. Implement proper loading and error states
-4. Ensure mobile responsiveness
-5. Add proper accessibility attributes
-
-### Styling Guidelines
-1. Use Tailwind utility classes
-2. Leverage CSS custom properties for theming
-3. Maintain consistent spacing and typography
-4. Follow design system color palette
-
-### State Management
-1. Use React hooks for local state
-2. Lift state up when needed across components
-3. Consider custom hooks for reusable logic
-4. Use React Hook Form for form state
-
-## 🔍 Troubleshooting
+## 🐛 Troubleshooting
 
 ### Common Issues
-1. **Build Errors**: Check TypeScript and ESLint configurations
-2. **Styling Issues**: Verify Tailwind CSS setup and imports
-3. **Component Imports**: Check path aliases and component exports
-4. **Theme Issues**: Ensure ThemeProvider is properly configured
 
-### Development Server Issues
-- Clear `.next` cache: `rm -rf .next`
-- Reinstall dependencies: `rm -rf node_modules && npm install`
-- Check Next.js version compatibility
+#### "No clones found" in Upload Page
+- **Cause**: Column name mismatch (`description` vs `bio`)
+- **Solution**: Fixed in latest update - restart servers
 
-## 📚 Resources
+#### "Failed to retrieve clone" Error
+- **Cause**: Backend API trying to access non-existent `description` column
+- **Solution**: Fixed - backend now uses `bio` column correctly
 
-### Documentation
-- [Next.js Documentation](https://nextjs.org/docs)
-- [shadcn/ui Documentation](https://ui.shadcn.com)
-- [Tailwind CSS Documentation](https://tailwindcss.com/docs)
-- [React Hook Form](https://react-hook-form.com)
+#### Document Upload Failures
+- **Check**: Supabase Storage bucket permissions
+- **Check**: File size limits (default 10MB)
+- **Check**: Supported file types (PDF, DOC, TXT, MD)
 
-### Component Reference
-- All UI components are documented in the shadcn/ui library
-- Custom components include TypeScript interfaces
-- Props and usage examples available in component files
+#### Session Page Not Loading
+- **Check**: Backend server running on port 8000
+- **Check**: Clone exists and is published
+- **Check**: User authentication status
+
+### Database Issues
+```bash
+# Check Supabase connection
+# Verify RLS policies are enabled
+# Check user permissions
+```
+
+### Backend Server Issues
+```bash
+# Restart backend server
+cd backend
+source venv/bin/activate
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# Check logs for specific errors
+# Verify environment variables
+```
+
+## 📚 API Documentation
+
+### Core Endpoints
+
+#### Clone Management
+- `GET /api/v1/clones` - List all clones
+- `GET /api/v1/clones/{id}` - Get specific clone
+- `POST /api/v1/clones` - Create new clone
+- `PUT /api/v1/clones/{id}` - Update clone
+- `DELETE /api/v1/clones/{id}` - Delete clone
+
+#### Document Management
+- `POST /api/v1/clones/{id}/documents/upload` - Upload document
+- `DELETE /api/v1/clones/{id}/documents/{doc_id}` - Delete document
+- `POST /api/v1/clones/{id}/documents/check-duplicate` - Check duplicates
+
+#### RAG Integration
+- `POST /api/v1/rag/expert/update` - Update expert knowledge
+- `POST /api/v1/rag/query` - Query expert knowledge
+
+#### Session Management
+- `POST /api/v1/sessions` - Create session
+- `GET /api/v1/sessions/{id}` - Get session details
+- `PUT /api/v1/sessions/{id}` - Update session
 
 ## 🔄 Future Enhancements
 
-### Planned Features
-- Real-time chat functionality
-- WebRTC video/voice integration
-- Payment processing integration
-- Advanced analytics dashboard
-- Mobile app development
+### Short-term (Next Sprint)
+- [ ] Real-time WebSocket integration for chat
+- [ ] WebRTC implementation for voice/video calls
+- [ ] Payment processing integration
+- [ ] Enhanced analytics dashboard
+- [ ] Mobile-responsive improvements
 
-### Technical Improvements
-- State management library (Redux Toolkit, Zustand)
-- API layer with React Query
-- End-to-end testing setup
-- Performance monitoring
-- Accessibility auditing
+### Medium-term
+- [ ] Advanced RAG features (multi-document queries)
+- [ ] Custom voice model training
+- [ ] Clone marketplace with ratings
+- [ ] Admin dashboard for platform management
+- [ ] API rate limiting and monitoring
+
+### Long-term
+- [ ] Mobile app development (React Native)
+- [ ] Multi-language support
+- [ ] Enterprise features and SSO
+- [ ] Advanced AI model customization
+- [ ] Blockchain integration for clone ownership
+
+## 👥 Contributing
+
+### Development Workflow
+1. Create feature branch from `main`
+2. Implement changes with proper testing
+3. Update documentation as needed
+4. Submit pull request with detailed description
+5. Code review and merge
+
+### Code Standards
+- **TypeScript**: Use strict type checking
+- **React**: Follow hooks patterns and best practices
+- **Python**: Follow PEP 8 style guide
+- **Documentation**: Update README for significant changes
+
+## 📄 License
+
+This project is part of the 100x Engineers Capstone program. All rights reserved.
 
 ---
 
-*This documentation is maintained alongside the codebase. Please update it when making significant changes to the frontend structure or adding new features.*
+## 🔗 Quick Links
+
+- **Live Demo**: [Coming Soon]
+- **API Documentation**: http://localhost:8000/docs
+- **Supabase Dashboard**: [Your Supabase Project]
+- **OpenAI Platform**: https://platform.openai.com
+- **ElevenLabs**: https://elevenlabs.io
+
+---
+
+*Last Updated: August 2025*
+*Version: 2.0.0 - Major Session & Document Management Update*
