@@ -6,7 +6,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import Link from 'next/link';
-import { Eye, EyeOff, Loader2, CheckCircle } from 'lucide-react';
+import { Eye, EyeOff, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 
 import { useAuth } from '@/contexts/auth-context';
 import { validatePassword } from '@/lib/auth-api';
@@ -43,6 +43,9 @@ export function SignupForm() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [registrationSuccess, setRegistrationSuccess] = useState(false);
+  const [alreadyRegistered, setAlreadyRegistered] = useState(false);
+  const [accountConflict, setAccountConflict] = useState(false);
+  const [registeredEmail, setRegisteredEmail] = useState('');
   const { signup, error, clearError } = useAuth();
   const router = useRouter();
 
@@ -76,12 +79,115 @@ export function SignupForm() {
       setRegistrationSuccess(true);
       
     } catch (error) {
-      // Error is handled by the auth context
-      console.error('Signup failed:', error);
+      // Handle specific error cases
+      if (error instanceof Error) {
+        if (error.message === 'ALREADY_REGISTERED') {
+          // Handle "already registered" case with custom UI - completely silent
+          setAlreadyRegistered(true);
+          setRegisteredEmail(data.email);
+          clearError(); // Clear the error since we're handling it with a custom UI
+          // Don't log anything for this expected user flow
+        } else if (error.message === 'ACCOUNT_CONFLICT') {
+          // Handle account conflict case - user exists in Supabase auth but not in our database
+          setAccountConflict(true);
+          setRegisteredEmail(data.email);
+          clearError(); // Clear the error since we're handling it with a custom UI
+        } else if (error.message === 'SIGNUP_FAILED') {
+          // Keep generic error message for database issues
+          console.error('Signup failed - database error:', 'Service temporarily unavailable');
+        } else {
+          console.error('Signup failed:', error);
+        }
+      } else {
+        console.error('Signup failed:', error);
+      }
     } finally {
       setIsLoading(false);
     }
   };
+
+  if (accountConflict) {
+    return (
+      <Card className="w-full max-w-md mx-auto">
+        <CardHeader className="space-y-1">
+          <div className="flex justify-center mb-4">
+            <AlertCircle className="h-16 w-16 text-orange-500" />
+          </div>
+          <CardTitle className="text-2xl font-bold text-center">
+            Account Recovery Needed
+          </CardTitle>
+          <CardDescription className="text-center">
+            There's an issue with the account for <strong>{registeredEmail}</strong>. 
+            Please contact support or try signing up with a different email address.
+          </CardDescription>
+        </CardHeader>
+        
+        <CardFooter className="flex flex-col space-y-3">
+          <Button 
+            onClick={() => {
+              setAccountConflict(false);
+              setRegisteredEmail('');
+              form.reset();
+            }}
+            className="w-full"
+          >
+            Try Different Email
+          </Button>
+          <div className="text-sm text-center text-muted-foreground">
+            Need help? Contact support for assistance with account recovery.
+          </div>
+        </CardFooter>
+      </Card>
+    );
+  }
+
+  if (alreadyRegistered) {
+    return (
+      <Card className="w-full max-w-md mx-auto">
+        <CardHeader className="space-y-1">
+          <div className="flex justify-center mb-4">
+            <AlertCircle className="h-16 w-16 text-blue-500" />
+          </div>
+          <CardTitle className="text-2xl font-bold text-center">
+            Account Already Exists
+          </CardTitle>
+          <CardDescription className="text-center">
+            An account with <strong>{registeredEmail}</strong> already exists. 
+            You can sign in with your existing credentials.
+          </CardDescription>
+        </CardHeader>
+        
+        <CardFooter className="flex flex-col space-y-3">
+          <Button 
+            onClick={() => router.push('/auth/login')}
+            className="w-full"
+          >
+            Go to Sign In
+          </Button>
+          <Button 
+            variant="outline"
+            onClick={() => {
+              setAlreadyRegistered(false);
+              setRegisteredEmail('');
+              form.reset();
+            }}
+            className="w-full"
+          >
+            Try Different Email
+          </Button>
+          <div className="text-sm text-center text-muted-foreground">
+            Forgot your password?{' '}
+            <Link 
+              href="/auth/forgot-password" 
+              className="text-primary hover:underline font-medium"
+            >
+              Reset it here
+            </Link>
+          </div>
+        </CardFooter>
+      </Card>
+    );
+  }
 
   if (registrationSuccess) {
     return (
@@ -94,7 +200,7 @@ export function SignupForm() {
             Registration Successful!
           </CardTitle>
           <CardDescription className="text-center">
-            We've sent a verification email to your address. Please check your email and click the verification link to activate your account.
+            Your account has been created successfully. You can now sign in with your credentials.
           </CardDescription>
         </CardHeader>
         
@@ -103,21 +209,8 @@ export function SignupForm() {
             onClick={() => router.push('/auth/login')}
             className="w-full"
           >
-            Go to Login
+            Go to Sign In
           </Button>
-          <div className="text-sm text-center text-muted-foreground">
-            Didn't receive the email?{' '}
-            <Button 
-              variant="link" 
-              className="p-0 h-auto text-primary"
-              onClick={() => {
-                // TODO: Implement resend verification
-                console.log('Resend verification email');
-              }}
-            >
-              Resend verification
-            </Button>
-          </div>
         </CardFooter>
       </Card>
     );
@@ -135,9 +228,13 @@ export function SignupForm() {
       </CardHeader>
       
       <CardContent>
-        {error && (
+        {error && !alreadyRegistered && (
           <Alert variant="destructive" className="mb-4">
-            <AlertDescription>{error}</AlertDescription>
+            <AlertDescription>
+              {error.includes('Database error') || error.includes('AuthApiError') 
+                ? 'Unable to create account. Please try again later.' 
+                : error}
+            </AlertDescription>
           </Alert>
         )}
 

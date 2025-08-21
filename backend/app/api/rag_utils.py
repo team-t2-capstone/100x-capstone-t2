@@ -11,7 +11,18 @@ from app.config import settings
 from app.database import get_supabase
 
 # Initialize clients with backend config
-OPENAI_API_KEY = settings.OPENAI_API_KEY
+# Reload settings to get updated API key
+def get_openai_api_key():
+    """Get the current OpenAI API key, reloading settings if needed"""
+    import os
+    # Try to get from environment first (most up-to-date)
+    api_key = os.getenv('OPENAI_API_KEY')
+    if not api_key:
+        # Fallback to settings
+        api_key = settings.OPENAI_API_KEY
+    return api_key
+
+OPENAI_API_KEY = get_openai_api_key()
 LLAMAPARSE_API_KEY = getattr(settings, 'LLAMAPARSE_API_KEY', None)
 
 # Initialize Supabase client - use service client for RAG operations
@@ -65,8 +76,8 @@ except ImportError:
         ]
         return any(re.search(pattern, url) for pattern in youtube_patterns)
 
-# Initialize OpenAI client
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Initialize OpenAI client with fresh API key
+client = OpenAI(api_key=get_openai_api_key())
 
 # Initialize logger
 logger = structlog.get_logger()
@@ -1174,17 +1185,43 @@ async def create_assistant(expert_name: str, memory_type: str = "expert", model:
 async def get_or_create_assistant(expert_name: str, memory_type: str = "expert", model: str = "gpt-4o"):
     """
     Get an existing assistant or create a new one
+    Check for documents first - if no documents exist, return None to fallback to LLM
     
     Args:
-        expert_name: Name of the expert
+        expert_name: Name of the expert (could be clone ID)
         memory_type: Type of memory to use (llm, domain, expert, client)
         model: OpenAI model to use
         
     Returns:
-        Assistant object with ID
+        Assistant object with ID, or None if no documents exist (fallback to LLM)
     """
     try:
         logger.info("get_or_create_assistant: Looking for assistant", expert_name=expert_name, memory_type=memory_type)
+        
+        # First check if there are any documents for this expert/clone
+        print(f"[DEBUG] get_or_create_assistant: Checking for documents for expert '{expert_name}'")
+        try:
+            # Check documents table for any documents associated with this expert/clone
+            # Try multiple queries since or_ might not be available
+            docs_result = None
+            
+            # First try client_name (this is the correct column for clone_id)
+            docs_query = _ensure_supabase().table("documents").select("id").eq("client_name", expert_name)
+            docs_result = docs_query.execute()
+            
+            # If no results, try created_by as fallback
+            if not docs_result.data or len(docs_result.data) == 0:
+                docs_query = _ensure_supabase().table("documents").select("id").eq("created_by", expert_name)
+                docs_result = docs_query.execute()
+            
+            if not docs_result.data or len(docs_result.data) == 0:
+                print(f"[DEBUG] get_or_create_assistant: No documents found for expert '{expert_name}', falling back to LLM")
+                return None  # Return None to indicate fallback to LLM
+                
+            print(f"[DEBUG] get_or_create_assistant: Found {len(docs_result.data)} documents for expert '{expert_name}'")
+        except Exception as e:
+            print(f"[DEBUG] get_or_create_assistant: Error checking documents: {str(e)}, falling back to LLM")
+            return None
         
         # Check if assistant already exists
         query = _ensure_supabase().table("assistants").select("*").eq("expert_name", expert_name).eq("memory_type", memory_type)
@@ -1442,6 +1479,7 @@ async def delete_files_in_vector_store(client, vector_store_id: str, file_ids: l
 async def query_expert_with_assistant(expert_name: str, query: str, memory_type: str = "expert", thread_id: str = None):
     """
     Query an expert using the OpenAI Assistant API
+    Falls back to direct LLM if no documents exist for the expert
     
     Args:
         expert_name: Name of the expert
@@ -1455,9 +1493,77 @@ async def query_expert_with_assistant(expert_name: str, query: str, memory_type:
     try:
         logger.info("query_expert_with_assistant: Starting query", expert_name=expert_name, memory_type=memory_type)
         
-        # Get or create the assistant
+        # Get or create the assistant (returns None if no documents exist)
         assistant = await get_or_create_assistant(expert_name, memory_type)
         
+        # If no assistant (no documents), fallback to direct LLM call
+        if assistant is None:
+            print(f"[DEBUG] query_expert_with_assistant: No documents found for expert '{expert_name}', using direct LLM")
+            
+            # Create a simple system prompt for the clone/expert
+            system_prompt = f"You are an AI assistant. Respond helpfully to the user's query."
+            
+            # Try to get clone information to create a better system prompt
+            try:
+                clone_result = _ensure_supabase().table("clones").select("name, bio, professional_title, category, system_prompt").eq("id", expert_name).execute()
+                if clone_result.data and len(clone_result.data) > 0:
+                    clone = clone_result.data[0]
+                    system_prompt = f"You are {clone.get('name', 'an AI assistant')}, "
+                    if clone.get('bio'):
+                        system_prompt += f"{clone.get('bio')} "
+                    if clone.get('professional_title'):
+                        system_prompt += f"I am a {clone.get('professional_title')} "
+                    if clone.get('category'):
+                        system_prompt += f"specializing in {clone.get('category')}. "
+                    if clone.get('system_prompt'):
+                        system_prompt += f"{clone.get('system_prompt')} "
+                    system_prompt += "Respond helpfully and professionally to the user's query."
+            except Exception as e:
+                print(f"[DEBUG] query_expert_with_assistant: Could not get clone info: {str(e)}")
+            
+            # Make direct OpenAI API call using the existing client
+            try:
+                current_key = get_openai_api_key()
+                print(f"[DEBUG] query_expert_with_assistant: Making OpenAI API call with key ending in ...{current_key[-10:] if current_key else 'None'}")
+                
+                # Create a fresh client with the current API key
+                fresh_client = OpenAI(api_key=current_key)
+                response = fresh_client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": system_prompt + " Keep your response concise and under 400 characters for voice synthesis."},
+                        {"role": "user", "content": query}
+                    ],
+                    temperature=0.7,
+                    max_tokens=150  # Reduced from 1000 to keep responses shorter
+                )
+                
+                llm_response = response.choices[0].message.content
+                print(f"[DEBUG] query_expert_with_assistant: OpenAI API call successful")
+                
+                return {
+                    "response": {"text": llm_response},
+                    "thread_id": None,  # No thread for direct LLM calls
+                    "run_id": None,     # No run for direct LLM calls
+                    "status": "completed",
+                    "source": "llm_fallback"
+                }
+            except Exception as llm_error:
+                print(f"[ERROR] query_expert_with_assistant: LLM fallback failed: {str(llm_error)}")
+                
+                # Final fallback with a simple response
+                fallback_response = f"I'm {expert_name if expert_name else 'an AI assistant'}. I understand you're asking about: {query[:50]}... I'd be happy to help, but I'm currently experiencing technical difficulties. Please try again or rephrase your question."
+                
+                print(f"[DEBUG] query_expert_with_assistant: Using final fallback response")
+                return {
+                    "response": {"text": fallback_response},
+                    "thread_id": None,
+                    "run_id": None,
+                    "status": "completed",
+                    "source": "final_fallback"
+                }
+        
+        # Continue with assistant-based response
         # Create a thread if one wasn't provided
         if not thread_id:
             thread = await create_thread()
@@ -1479,7 +1585,8 @@ async def query_expert_with_assistant(expert_name: str, query: str, memory_type:
             "response": {"text": response},
             "thread_id": thread_id,
             "run_id": run.id,
-            "status": run.status
+            "status": run.status,
+            "source": "assistant"
         }
     except Exception as e:
         print(f"[ERROR] query_expert_with_assistant: {str(e)}")

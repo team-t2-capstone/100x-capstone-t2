@@ -4,10 +4,6 @@ backend/venv/
 **/__pycache__/
 *.pyc
 
-# Environment variables
-.env
-.env.local
-
 # IDE & OS
 .vscode/
 .DS_Store
@@ -30,3 +26,4 @@ ui-analysis-report.json
 
 # Claude files
 .claude/
+CLAUDE.md

@@ -49,7 +49,7 @@ export function Navbar() {
 
   const userNavItems = isAuthenticated ? [
     { href: '/dashboard', label: 'Dashboard' },
-    { href: '/upload', label: 'Upload' },
+    ...(user?.role === 'creator' ? [{ href: '/upload', label: 'Upload' }] : []),
     ...(user?.role === 'creator' ? [{ href: '/dashboard/creator', label: 'Creator Studio' }] : []),
     { href: '/discover', label: 'Discover' },
   ] : navItems;
@@ -100,12 +100,14 @@ export function Navbar() {
                   </div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link href="/upload" className="flex items-center">
-                    <Upload className="mr-2 h-4 w-4" />
-                    Upload Documents
-                  </Link>
-                </DropdownMenuItem>
+                {user?.role === 'creator' && (
+                  <DropdownMenuItem asChild>
+                    <Link href="/upload" className="flex items-center">
+                      <Upload className="mr-2 h-4 w-4" />
+                      Upload Documents
+                    </Link>
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem asChild>
                   <Link href="/profile" className="flex items-center">
                     <User className="mr-2 h-4 w-4" />
@@ -179,15 +181,17 @@ export function Navbar() {
                     </div>
                   </div>
                   <div className="flex flex-col space-y-2">
-                    <Button variant="ghost" className="justify-start" asChild>
-                      <Link 
-                        href="/upload" 
-                        onClick={() => setMobileMenuOpen(false)}
-                      >
-                        <Upload className="mr-2 h-4 w-4" />
-                        Upload Documents
-                      </Link>
-                    </Button>
+                    {user?.role === 'creator' && (
+                      <Button variant="ghost" className="justify-start" asChild>
+                        <Link 
+                          href="/upload" 
+                          onClick={() => setMobileMenuOpen(false)}
+                        >
+                          <Upload className="mr-2 h-4 w-4" />
+                          Upload Documents
+                        </Link>
+                      </Button>
+                    )}
                     <Button variant="ghost" className="justify-start" asChild>
                       <Link 
                         href="/profile" 

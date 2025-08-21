@@ -27,6 +27,7 @@ interface SignupRequest {
   email: string;
   password: string;
   full_name: string;
+  role: 'user' | 'creator';
 }
 
 interface AuthContextType {
@@ -177,14 +178,39 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setLoading(true);
       setError(null);
       
-      // Use Supabase client to authenticate
-      const { data, error: authError } = await supabase.auth.signInWithPassword({
-        email: credentials.email,
-        password: credentials.password,
-      });
+      // Temporarily suppress console.error to prevent Supabase from logging "Invalid login credentials"
+      const originalConsoleError = console.error;
+      console.error = (...args: any[]) => {
+        // Check if this is the "Invalid login credentials" error from Supabase
+        const isInvalidCredentialsError = args.some(arg => 
+          (typeof arg === 'string' && arg.includes('Invalid login credentials')) ||
+          (arg && typeof arg === 'object' && arg.message && arg.message.includes('Invalid login credentials'))
+        );
+        
+        // Only log if it's not the "invalid credentials" error
+        if (!isInvalidCredentialsError) {
+          originalConsoleError.apply(console, args);
+        }
+      };
+      
+      let authResult;
+      try {
+        // Normalize email input
+        console.log('Attempting login with email:', credentials.email);
+        
+        // Use Supabase client to authenticate
+        authResult = await supabase.auth.signInWithPassword({
+          email: credentials.email.trim().toLowerCase(), // Normalize email
+          password: credentials.password,
+        });
+      } finally {
+        // Always restore console.error
+        console.error = originalConsoleError;
+      }
+      
+      const { data, error: authError } = authResult;
       
       if (authError) {
-        console.error('Authentication error:', authError);
         throw authError;
       }
       
@@ -203,7 +229,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         .single();
       
       if (profileError) {
-        console.error('Failed to fetch user profile after login:', profileError);
         throw new Error('Failed to load user profile');
       }
       
@@ -218,7 +243,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Login failed';
-      console.error('Login process failed:', errorMessage);
       setError(errorMessage);
       throw error;
     } finally {
@@ -232,20 +256,82 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setLoading(true);
       setError(null);
       
-      // Use Supabase client to create user
-      const { data, error: authError } = await supabase.auth.signUp({
-        email: userData.email,
-        password: userData.password,
-        options: {
-          data: {
-            full_name: userData.full_name,
+      // Temporarily suppress console.error to prevent Supabase from logging "User already registered"
+      const originalConsoleError = console.error;
+      console.error = (...args: any[]) => {
+        // Check if this is the "User already registered" error from Supabase
+        const isAlreadyRegisteredError = args.some(arg => 
+          (typeof arg === 'string' && arg.includes('User already registered')) ||
+          (arg && typeof arg === 'object' && arg.message && arg.message.includes('User already registered'))
+        );
+        
+        // Only log if it's not the "already registered" error
+        if (!isAlreadyRegisteredError) {
+          originalConsoleError.apply(console, args);
+        }
+      };
+      
+      let authResult;
+      try {
+        // Use Supabase client to create user
+        authResult = await supabase.auth.signUp({
+          email: userData.email,
+          password: userData.password,
+          options: {
+            data: {
+              full_name: userData.full_name,
+              role: userData.role,
+            },
+            emailRedirectTo: `${window.location.origin}/auth/confirm`,
           },
-          emailRedirectTo: `${window.location.origin}/auth/confirm`,
-        },
-      });
+        });
+      } finally {
+        // Always restore console.error
+        console.error = originalConsoleError;
+      }
+      
+      const { data, error: authError } = authResult;
+      
+      // Log detailed error information for debugging (skip already registered case)
+      if (authError && !authError.message.includes('User already registered')) {
+        console.error('Signup error details:', {
+          message: authError.message,
+          status: authError.status,
+          statusText: authError.status,
+          name: authError.name
+        });
+      }
       
       if (authError) {
-        throw authError;
+        // Handle specific error cases more gracefully
+        if (authError.message.includes('User already registered') || authError.message.includes('already registered')) {
+          // Check if user actually exists in our database
+          try {
+            const { data: existingProfile } = await supabase
+              .from('user_profiles')
+              .select('email, full_name')
+              .eq('email', userData.email)
+              .single();
+            
+            if (existingProfile) {
+              // User exists in our database - legitimate "already registered" case
+              throw new Error('ALREADY_REGISTERED');
+            } else {
+              // User doesn't exist in our database but Supabase says they do
+              // This might be a caching issue or orphaned auth record
+              throw new Error('ACCOUNT_CONFLICT');
+            }
+          } catch (profileCheckError) {
+            // If we can't check the profile, assume it's a legitimate "already registered"
+            throw new Error('ALREADY_REGISTERED');
+          }
+        } else if (authError.message.includes('Database error')) {
+          console.error('Database error during signup:', authError.message);
+          throw new Error('SIGNUP_FAILED');
+        } else {
+          console.error('Signup error:', authError);
+          throw authError;
+        }
       }
       
       // If email confirmation is required, user will be null initially
@@ -275,9 +361,39 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
       
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Registration failed';
-      setError(errorMessage);
-      throw error;
+      let errorMessage = 'Registration failed';
+      let shouldThrow = true;
+      
+      if (error instanceof Error) {
+        if (error.message === 'ALREADY_REGISTERED') {
+          errorMessage = 'This email is already registered';
+          // Don't set error for ALREADY_REGISTERED since it's handled in UI
+          shouldThrow = true; // Still throw so the component can catch and handle it
+        } else if (error.message === 'ACCOUNT_CONFLICT') {
+          errorMessage = 'ACCOUNT_CONFLICT';
+          // Don't set error for ACCOUNT_CONFLICT since it's handled in UI
+          shouldThrow = true; // Still throw so the component can catch and handle it
+        } else if (error.message === 'SIGNUP_FAILED') {
+          errorMessage = 'Unable to create account. Please try again later.';
+        } else if (error.message.includes('Database error')) {
+          errorMessage = 'Service temporarily unavailable. Please try again later.';
+        } else if (error.message.includes('Invalid email')) {
+          errorMessage = 'Please enter a valid email address';
+        } else if (error.message.includes('Password')) {
+          errorMessage = 'Password does not meet requirements';
+        } else {
+          errorMessage = error.message;
+        }
+      }
+      
+      // Only set error state for non-ALREADY_REGISTERED and non-ACCOUNT_CONFLICT cases
+      if (!(error instanceof Error) || (error.message !== 'ALREADY_REGISTERED' && error.message !== 'ACCOUNT_CONFLICT')) {
+        setError(errorMessage);
+      }
+      
+      if (shouldThrow) {
+        throw error;
+      }
     } finally {
       setLoading(false);
     }

@@ -80,7 +80,7 @@ class RAGCoreService:
             logger.info("🔄 Step 4: Processing documents to vector store", 
                        vector_store_id=vector_store.id, doc_count=len(clone_documents))
             processed_docs = await self._process_documents_to_vector_store(
-                vector_store.id, clone_documents, progress_callback
+                vector_store.id, clone_documents, domain_name, progress_callback
             )
             logger.info("✅ Documents processed and embedded", processed_count=len(processed_docs))
             
@@ -239,15 +239,16 @@ class RAGCoreService:
                 raise Exception(f"Vector store not found for expert: {expert_name}")
             
             vector_store_id = vector_info.data[0]["vector_id"]
+            domain_name = vector_info.data[0].get("domain_name", "general")
             
             if operation == "add":
                 # Add new documents to vector store
-                await self._process_documents_to_vector_store(vector_store_id, documents)
+                await self._process_documents_to_vector_store(vector_store_id, documents, domain_name)
             elif operation == "replace":
                 # Replace all documents
                 # First clear existing, then add new
                 await self._clear_vector_store(vector_store_id)
-                await self._process_documents_to_vector_store(vector_store_id, documents)
+                await self._process_documents_to_vector_store(vector_store_id, documents, domain_name)
             
             return {
                 "status": "updated",
@@ -324,7 +325,7 @@ class RAGCoreService:
                         error_type=type(e).__name__)
             raise e
     
-    async def _process_documents_to_vector_store(self, vector_store_id: str, documents: List[Dict], progress_callback=None) -> List[str]:
+    async def _process_documents_to_vector_store(self, vector_store_id: str, documents: List[Dict], domain_name: str, progress_callback=None) -> List[str]:
         """Process documents and add to vector store"""
         processed_files = []
         total_docs = len(documents)
@@ -383,7 +384,7 @@ class RAGCoreService:
                         "name": doc.get("title", "Untitled"),
                         "document_link": doc.get("file_url"),
                         "openai_file_id": file.id,
-                        "domain": "general",  # Could extract from context
+                        "domain": domain_name,  # Use the actual domain from clone category
                         "client_name": doc.get("clone_id")
                     }
                     

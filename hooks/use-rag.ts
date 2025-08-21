@@ -43,8 +43,74 @@ export function useRAG(cloneId: string) {
   const [metrics, setMetrics] = useState<RAGMetrics | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Check RAG status
-  // Removed checkStatus function - no longer needed without polling
+  // Check RAG status by querying database for existing assistant/vector store
+  const checkStatus = useCallback(async () => {
+    if (!cloneId) return;
+
+    try {
+      // Check if assistant and vector store already exist using a direct database query
+      // We'll use the simplified RAG status endpoint when available
+      const { createClient } = await import('@/utils/supabase/client');
+      const supabase = createClient();
+      
+      // Check if vector store exists for this clone
+      const { data: vectorData } = await supabase
+        .from('vector_stores')
+        .select('*')
+        .eq('expert_name', cloneId)
+        .single();
+      
+      // Check if assistant exists for this clone  
+      const { data: assistantData } = await supabase
+        .from('assistants')
+        .select('*')
+        .eq('expert_name', cloneId)
+        .eq('memory_type', 'expert')
+        .single();
+
+      if (vectorData && assistantData) {
+        // Get actual knowledge count from knowledge table
+        const { data: knowledgeData } = await supabase
+          .from('knowledge')
+          .select('id')
+          .eq('clone_id', cloneId);
+        
+        // Memory layer already exists and is ready
+        setState(prev => ({
+          ...prev,
+          isInitialized: true,
+          isInitializing: false,
+          status: 'ready',
+          error: null,
+          documentCount: knowledgeData?.length || 0,
+          lastInitialized: new Date(vectorData.updated_at),
+          initializationId: null
+        }));
+      } else {
+        // Memory layer not initialized
+        setState(prev => ({
+          ...prev,
+          isInitialized: false,
+          isInitializing: false,
+          status: 'disabled',
+          error: null,
+          documentCount: 0,
+          lastInitialized: null,
+          initializationId: null
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to check RAG status:', error);
+      // Don't set error state for status check failures
+      setState(prev => ({
+        ...prev,
+        isInitialized: false,
+        isInitializing: false,
+        status: 'disabled',
+        error: null
+      }));
+    }
+  }, [cloneId]);
 
   // Initialize RAG using simplified approach
   const initializeRAG = useCallback(async (options: { force_reinitialize?: boolean } = {}) => {
@@ -184,7 +250,12 @@ export function useRAG(cloneId: string) {
     }
   }, []);
 
-  // Removed automatic status check - status is now managed through explicit actions
+  // Check status on component mount
+  useEffect(() => {
+    if (cloneId) {
+      checkStatus();
+    }
+  }, [cloneId, checkStatus]);
 
   return {
     // State
@@ -199,6 +270,7 @@ export function useRAG(cloneId: string) {
     disableRAG,
     getAnalytics,
     checkSystemHealth,
+    checkStatus,
 
     // Computed values
     canInitialize: !state.isInitializing && !state.isInitialized && state.status !== 'error',

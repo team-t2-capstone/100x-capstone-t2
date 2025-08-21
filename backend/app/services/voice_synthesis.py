@@ -111,6 +111,11 @@ class VoiceSynthesisService:
             Audio data as bytes (MP3 format)
         """
         try:
+            # Check text length limit for voice generation
+            if len(text) > 500:
+                logger.warning(f"Text too long for voice generation: {len(text)} characters", clone_id=clone_id)
+                raise ValueError("Cannot generate audio for longer responses")
+                
             if not self._ensure_client():
                 # Return empty audio if no API key is available
                 return b''

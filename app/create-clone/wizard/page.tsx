@@ -20,6 +20,7 @@ import { useAuth } from '@/contexts/auth-context';
 import { getAuthTokens } from '@/lib/api-client';
 import { setupStorageBuckets, checkStorageBuckets } from '@/lib/setup-storage';
 import { toast } from '@/components/ui/use-toast';
+import { checkCloneEditPermission, showPublishedCloneAlert } from '@/lib/clone-utils';
 // Removed: EnhancedProcessingMonitor import (RAG functionality removed)
 import { EnhancedDocumentUpload } from '@/components/document-upload/enhanced-document-upload';
 import { MemoryLayerControl } from '@/components/wizard/memory-layer-control';
@@ -174,6 +175,7 @@ function CloneWizardContent() {
   const [isLoading, setIsLoading] = useState(false)
   const [createdCloneId, setCreatedCloneId] = useState<string | null>(null)
   const [isNavigating, setIsNavigating] = useState(false)
+  const [isClonePublished, setIsClonePublished] = useState(false)
 
   // RAG processing state
   const [isProcessingKnowledge, setIsProcessingKnowledge] = useState(false)
@@ -310,6 +312,20 @@ function CloneWizardContent() {
         console.log('Credentials type:', typeof clone.credentials_qualifications)
         console.log('Avatar URL from DB:', clone.avatar_url)
         console.log('Expertise areas from DB:', clone.expertise_areas)
+        
+        // Set published state for UI display
+        setIsClonePublished(clone.is_published || false)
+        
+        // Check if clone is published and prevent editing
+        if (clone.is_published) {
+          console.log('Clone is published, showing alert and redirecting')
+          showPublishedCloneAlert(clone.name)
+          // Redirect to read-only view or dashboard after showing alert
+          setTimeout(() => {
+            window.location.href = '/dashboard/creator'
+          }, 100)
+          return
+        }
         
         // Load credentials as simple text
         const credentialsText = clone.credentials_qualifications || ""
@@ -628,9 +644,49 @@ function CloneWizardContent() {
       .map(([question, answer]) => `Q: ${question}\nA: ${answer}`)
       .join('\n\n')
 
+    // Convert personality traits to meaningful descriptions
+    const getPersonalityDescription = (trait: string, value: number) => {
+      const traitMappings: Record<string, { low: string; high: string; scale: string }> = {
+        formal: { 
+          low: 'casual and conversational', 
+          high: 'formal and professional', 
+          scale: 'casual ↔ formal'
+        },
+        detailed: { 
+          low: 'concise and to-the-point', 
+          high: 'detailed and comprehensive', 
+          scale: 'concise ↔ detailed'
+        },
+        supportive: { 
+          low: 'direct and straightforward', 
+          high: 'supportive and encouraging', 
+          scale: 'direct ↔ supportive'
+        },
+        analytical: { 
+          low: 'intuitive and gut-feeling based', 
+          high: 'analytical and data-driven', 
+          scale: 'intuitive ↔ analytical'
+        },
+        patient: { 
+          low: 'quick and fast-paced', 
+          high: 'patient and methodical', 
+          scale: 'quick ↔ patient'
+        }
+      }
+      
+      const mapping = traitMappings[trait]
+      if (!mapping) return `${trait}: ${value}%`
+      
+      if (value <= 25) return `Very ${mapping.low}`
+      if (value <= 45) return `Moderately ${mapping.low}`
+      if (value <= 55) return `Balanced between ${mapping.scale}`
+      if (value <= 75) return `Moderately ${mapping.high}`
+      return `Very ${mapping.high}`
+    }
+
     const personalityTraits = Object.entries(formData.personality)
-      .map(([trait, value]) => `${trait}: ${value[0]}/100`)
-      .join(', ')
+      .map(([trait, value]) => `${trait.charAt(0).toUpperCase() + trait.slice(1)}: ${getPersonalityDescription(trait, value[0])} (${value[0]}/100)`)
+      .join('\n- ')
 
     const systemPrompt = `You are ${formData.name}, a professional ${formData.title || 'expert'} specializing in ${formData.expertise}.
 
@@ -638,8 +694,8 @@ PROFESSIONAL BACKGROUND:
 ${formData.credentials ? `Credentials & Qualifications: ${formData.credentials}` : ''}
 Bio: ${formData.bio}
 
-PERSONALITY TRAITS (scale 1-100):
-${personalityTraits}
+PERSONALITY & COMMUNICATION TRAITS:
+- ${personalityTraits}
 
 COMMUNICATION STYLE:
 - Style: ${formData.communicationStyle}
@@ -1468,7 +1524,7 @@ INSTRUCTIONS:
           id: item.id || `knowledge-${Date.now()}`,
           name: finalName,
           url: item.file_url || item.original_url || '',
-          status: item.vector_store_status || 'pending',
+          status: item.vector_store_status || 'uploaded',
           type: item.content_type || 'unknown'
         }
         
@@ -1681,6 +1737,32 @@ INSTRUCTIONS:
         return null
       }
 
+      // Validate file type for avatar uploads
+      const supportedImageTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']
+      if (!supportedImageTypes.includes(file.type)) {
+        const errorMessage = `File type "${file.type}" is not supported. Please use JPEG, PNG, GIF, or WebP images.`
+        console.error('Unsupported file type:', file.type)
+        toast({
+          title: "Unsupported File Type",
+          description: errorMessage,
+          variant: "destructive"
+        })
+        throw new Error(errorMessage)
+      }
+
+      // Check file size (max 5MB)
+      const maxSizeInBytes = 5 * 1024 * 1024 // 5MB
+      if (file.size > maxSizeInBytes) {
+        const errorMessage = `File size too large. Maximum allowed size is 5MB.`
+        console.error('File too large:', file.size, 'bytes')
+        toast({
+          title: "File Too Large",
+          description: errorMessage,
+          variant: "destructive"
+        })
+        throw new Error(errorMessage)
+      }
+
       // Check if storage buckets exist, create them if needed
       const { allExist } = await checkStorageBuckets()
       if (!allExist) {
@@ -1815,21 +1897,26 @@ INSTRUCTIONS:
     if (!file) return
 
     // Validate file type and size
-    if (!file.type.startsWith('image/')) {
+    const supportedImageTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']
+    if (!supportedImageTypes.includes(file.type)) {
       toast({
-        title: "Invalid file type",
-        description: "Please upload an image file",
+        title: "Unsupported File Type",
+        description: `File type "${file.type}" is not supported. Please use JPEG, PNG, GIF, or WebP images.`,
         variant: "destructive",
       })
+      // Reset the input
+      event.target.value = ''
       return
     }
 
     if (file.size > 5 * 1024 * 1024) { // 5MB limit
       toast({
-        title: "File too large",
+        title: "File Too Large",
         description: "Please upload an image smaller than 5MB",
         variant: "destructive",
       })
+      // Reset the input
+      event.target.value = ''
       return
     }
 
@@ -2006,7 +2093,7 @@ INSTRUCTIONS:
         
         const { data: existingClone, error: checkError } = await supabase
           .from('clones')
-          .select('id, name, creator_id')
+          .select('id, name, creator_id, is_published')
           .eq('id', createdCloneId)
           .eq('creator_id', user?.id)
           .single()
@@ -2014,6 +2101,11 @@ INSTRUCTIONS:
         if (checkError || !existingClone) {
           console.warn('Existing clone not found, will create new one:', checkError?.message)
           setCreatedCloneId(null)
+        } else if (existingClone.is_published) {
+          console.log('Existing clone is published, cannot update')
+          showPublishedCloneAlert(existingClone.name)
+          setIsSubmitting(false)
+          return null
         } else {
           console.log('Existing clone found, will update it:', existingClone)
         }
@@ -2309,11 +2401,89 @@ INSTRUCTIONS:
     })
   }
 
-  const addLink = () => {
-    if (newLink.trim()) {
+  const addLink = async () => {
+    if (!newLink.trim()) return
+    
+    const linkUrl = newLink.trim()
+    
+    // Basic URL validation
+    try {
+      new URL(linkUrl)
+    } catch {
+      toast({
+        title: "Invalid URL",
+        description: "Please enter a valid URL (e.g., https://example.com)",
+        variant: "destructive"
+      })
+      return
+    }
+
+    // If clone doesn't exist yet, add to local state only
+    if (!createdCloneId) {
       setFormData({
         ...formData,
-        links: [...formData.links, newLink.trim()],
+        links: [...formData.links, linkUrl],
+      })
+      setNewLink("")
+      return
+    }
+
+    try {
+      // Save to Supabase knowledge table
+      const { data, error } = await supabase
+        .from('knowledge')
+        .insert({
+          clone_id: createdCloneId,
+          content_type: 'link',
+          title: linkUrl, // Use URL as title initially
+          original_url: linkUrl,
+          file_url: linkUrl,
+          content_preview: '',
+          tags: ['web_content'],
+          vector_store_status: 'pending' // Will be processed later
+        })
+        .select()
+        .single()
+
+      if (error) {
+        console.error('Error saving link to knowledge table:', error)
+        throw error
+      }
+
+      // Add to existingLinks in formData for immediate UI update
+      setFormData(prev => ({
+        ...prev,
+        existingLinks: [
+          ...(prev.existingLinks || []),
+          {
+            id: data.id,
+            name: linkUrl,
+            url: linkUrl,
+            status: 'uploaded',
+            type: 'link'
+          }
+        ]
+      }))
+
+      setNewLink("")
+      
+      toast({
+        title: "Link added",
+        description: "Link has been added to your knowledge base",
+      })
+
+    } catch (error) {
+      console.error('Failed to add link:', error)
+      toast({
+        title: "Failed to add link",
+        description: error instanceof Error ? error.message : "Please try again",
+        variant: "destructive"
+      })
+      
+      // Fallback: add to local state if database save fails
+      setFormData({
+        ...formData,
+        links: [...formData.links, linkUrl],
       })
       setNewLink("")
     }
@@ -2803,7 +2973,7 @@ INSTRUCTIONS:
                       <input
                         type="file"
                         id="photo-upload"
-                        accept="image/*"
+                        accept="image/jpeg,image/jpg,image/png,image/gif,image/webp"
                         onChange={handlePhotoUpload}
                         className="hidden"
                       />
@@ -3024,7 +3194,7 @@ INSTRUCTIONS:
                             id: document.id || `doc-${Date.now()}`,
                             name: document.filename || document.file_name || document.title || document.name || `Document-${Date.now()}`,
                             url: document.upload_url || document.file_url || document.url || '',
-                            status: document.processing_status || document.vector_store_status || document.status || 'pending',
+                            status: document.processing_status || document.vector_store_status || document.status || 'uploaded',
                             type: document.type || 'document'
                           }
                         ]
@@ -3157,6 +3327,12 @@ INSTRUCTIONS:
                                     {linkData.status === 'pending' && (
                                       <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-800">
                                         Pending
+                                      </span>
+                                    )}
+                                    {linkData.status === 'uploaded' && (
+                                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-blue-50 text-blue-700">
+                                        <Upload className="h-3 w-3 mr-1" />
+                                        Uploaded
                                       </span>
                                     )}
                                   </div>
@@ -3822,11 +3998,13 @@ INSTRUCTIONS:
                 cloneId={createdCloneId}
                 hasDocuments={
                   (formData.documents && formData.documents.length > 0) ||
-                  (formData.existingDocuments && formData.existingDocuments.length > 0)
+                  (formData.existingDocuments && formData.existingDocuments.length > 0) ||
+                  (formData.existingLinks && formData.existingLinks.length > 0)
                 }
                 documentCount={
                   (formData.documents?.length || 0) + 
-                  (formData.existingDocuments?.length || 0)
+                  (formData.existingDocuments?.length || 0) +
+                  (formData.existingLinks?.length || 0)
                 }
                 onRAGEnabled={(enabled) => {
                   // Optional: Track RAG enablement state
@@ -3847,7 +4025,7 @@ INSTRUCTIONS:
                   <span>Clone Testing</span>
                 </CardTitle>
                 <p className="text-sm text-slate-600 dark:text-slate-300 mt-1">
-                  Test your AI clone with real conversations powered by GPT-5. Your clone will respond using your professional background, credentials, and training data.
+                  Test your AI clone with real conversations. Your clone will respond using your professional background, credentials, and training data.
                 </p>
               </CardHeader>
               <CardContent>
@@ -3976,7 +4154,7 @@ INSTRUCTIONS:
                               {/* Standard Attribution */}
                               {message.sender === "clone" && message.id !== "typing" && (
                                 <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                                  {formData.name} • {message.ragData?.usedMemoryLayer ? 'Enhanced with Memory Layer' : 'Powered by GPT-5'}
+                                  {formData.name} • {message.ragData?.usedMemoryLayer ? 'Enhanced with Memory Layer' : ''}
                                 </div>
                               )}
                             </div>

@@ -4,6 +4,8 @@ import { useState, useRef, useEffect } from "react"
 import { useParams, useRouter } from 'next/navigation'
 import { getClone, type CloneResponse } from '@/lib/clone-api'
 import { useAuth } from '@/contexts/auth-context'
+import { getAuthTokens } from '@/lib/api-client'
+import { createClient } from '@/utils/supabase/client'
 import { toast } from '@/components/ui/use-toast'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -60,6 +62,7 @@ interface Message {
   sender: "user" | "expert"
   timestamp: Date
   typing?: boolean
+  audioUrl?: string // URL for voice responses
 }
 
 interface ExpertData extends CloneResponse {
@@ -188,6 +191,8 @@ export default function SessionPage() {
           expertise: cloneData.expertise_areas || ["General Consulting"],
           availability: cloneData.is_published ? "Available now" : "Currently unavailable",
           featured: false,
+          avatar: cloneData.avatar_url, // Ensure avatar is properly mapped
+          voice_id: cloneData.voice_id, // Include voice_id for audio functionality
         }
         
         setExpert(transformedExpert)
@@ -243,6 +248,17 @@ export default function SessionPage() {
     return () => clearInterval(interval)
   }, [sessionActive, sessionMode, expert])
 
+  // Cleanup audio URLs when messages change to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      messages.forEach(message => {
+        if (message.audioUrl) {
+          URL.revokeObjectURL(message.audioUrl);
+        }
+      });
+    };
+  }, [messages])
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
@@ -269,22 +285,181 @@ export default function SessionPage() {
     setInputMessage("")
     setIsTyping(true)
 
-    // Simulate AI response based on category
-    setTimeout(
-      () => {
+    try {
+      console.log('Sending request to test-clone API with:', {
+        expertName: expert.name,
+        expertType: expert.type,
+        cloneId: expert.id,
+        messageLength: content.trim().length
+      })
+      
+      // Use test-clone API endpoint which handles both RAG and LLM fallback
+      const response = await fetch('/api/chat/test-clone', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          systemPrompt: `You are ${expert.name}, an AI expert in ${expert.type}. ${expert.bio || expert.specialty}. Respond in character with helpful, professional advice.`,
+          userMessage: content.trim(),
+          cloneId: expert.id,
+          conversationHistory: []
+        })
+      })
+      
+      console.log('Response status:', response.status, 'OK:', response.ok)
+
+      let data
+      let aiResponse = 'I apologize, but I encountered an issue processing your request. Please try again.'
+      
+      if (response.ok) {
+        data = await response.json()
+        aiResponse = data.response || aiResponse
+      } else {
+        // Even if there's an error status, try to get the response body
+        try {
+          data = await response.json()
+          if (data.response) {
+            aiResponse = data.response
+            console.log('Using response despite error status:', response.status)
+          } else {
+            throw new Error(`HTTP error! status: ${response.status}`)
+          }
+        } catch (jsonError) {
+          console.error('Failed to parse error response:', jsonError)
+          throw new Error(`HTTP error! status: ${response.status}`)
+        }
+      }
+      
+      // Generate audio if voice_id is available (for audio clones)
+      let audioUrl = null
+      if (expert.voice_id) {
+        try {
+          console.log('Generating voice response for audio clone:', expert.name, 'with voice_id:', expert.voice_id)
+          
+          // Get authentication token
+          let token = getAuthTokens().accessToken
+          
+          // If no token in cookies, try to get from Supabase session
+          if (!token) {
+            try {
+              const supabase = createClient()
+              const { data: { session } } = await supabase.auth.getSession()
+              if (session?.access_token) {
+                token = session.access_token
+              }
+            } catch (error) {
+              console.error('Failed to get Supabase session:', error)
+            }
+          }
+          
+          console.log('Generating voice with:', {
+            textLength: aiResponse.length,
+            voiceId: expert.voice_id,
+            hasToken: !!token
+          })
+          
+          const formData = new FormData()
+          formData.append('text', aiResponse.slice(0, 500)) // Truncate to max 500 chars
+          formData.append('voice_id', expert.voice_id)
+          
+          const voiceResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/voice/test-voice`, {
+            method: 'POST',
+            body: formData,
+            headers: {
+              ...(token && { 'Authorization': `Bearer ${token}` })
+            }
+          })
+          
+          console.log('Voice response status:', voiceResponse.status)
+
+          if (voiceResponse.ok) {
+            const audioBlob = await voiceResponse.blob()
+            audioUrl = URL.createObjectURL(audioBlob)
+            console.log('Voice generation successful for audio clone')
+          } else {
+            const errorText = await voiceResponse.text()
+            console.error('Voice generation failed:', voiceResponse.status, errorText)
+          }
+        } catch (voiceError) {
+          console.error('Error generating voice response:', voiceError)
+        }
+      }
+      
+      const expertMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: aiResponse,
+        sender: "expert",
+        timestamp: new Date(),
+        audioUrl, // Add audio URL if available for audio clones
+      }
+      
+      setMessages((prev) => [...prev, expertMessage])
+      setIsTyping(false)
+      
+    } catch (error) {
+      console.error('Error querying expert:', error)
+      
+      // Fallback to mock response if test-clone API fails
+      setTimeout(async () => {
         const responses = getCategoryResponses(expert.type)
+        const fallbackResponse = responses[Math.floor(Math.random() * responses.length)]
+        
+        // Generate audio for fallback response if it's an audio clone
+        let audioUrl = null
+        if (expert.voice_id) {
+          try {
+            // Get authentication token
+            let token = getAuthTokens().accessToken
+            
+            // If no token in cookies, try to get from Supabase session
+            if (!token) {
+              try {
+                const supabase = createClient()
+                const { data: { session } } = await supabase.auth.getSession()
+                if (session?.access_token) {
+                  token = session.access_token
+                }
+              } catch (error) {
+                console.error('Failed to get Supabase session:', error)
+              }
+            }
+            
+            const formData = new FormData()
+            formData.append('text', fallbackResponse.slice(0, 500)) // Truncate to max 500 chars
+            formData.append('voice_id', expert.voice_id)
+            
+            const voiceResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/voice/test-voice`, {
+              method: 'POST',
+              body: formData,
+              headers: {
+                ...(token && { 'Authorization': `Bearer ${token}` })
+              }
+            })
+
+            if (voiceResponse.ok) {
+              const audioBlob = await voiceResponse.blob()
+              audioUrl = URL.createObjectURL(audioBlob)
+            } else {
+              const errorText = await voiceResponse.text()
+              console.error('Voice generation failed for fallback:', voiceResponse.status, errorText)
+            }
+          } catch (voiceError) {
+            console.error('Error generating voice for fallback response:', voiceError)
+          }
+        }
+        
         const expertMessage: Message = {
           id: (Date.now() + 1).toString(),
-          content: responses[Math.floor(Math.random() * responses.length)],
+          content: fallbackResponse,
           sender: "expert",
           timestamp: new Date(),
+          audioUrl, // Add audio URL if available for audio clones
         }
-
         setMessages((prev) => [...prev, expertMessage])
         setIsTyping(false)
-      },
-      2000 + Math.random() * 1000,
-    )
+      }, 1000)
+    }
   }
 
   const getCategoryResponses = (category: string) => {
@@ -536,6 +711,34 @@ export default function SessionPage() {
                         >
                           {message.content}
                         </p>
+                        
+                        {/* Audio Player for Voice Responses */}
+                        {message.sender === "expert" && message.audioUrl && (
+                          <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-600">
+                            <div className="flex items-center space-x-2 mb-2">
+                              <div className="flex items-center space-x-1 text-blue-600 dark:text-blue-400">
+                                <Volume2 className="h-3 w-3" />
+                                <span className="text-xs">Voice Response</span>
+                              </div>
+                            </div>
+                            <audio 
+                              controls 
+                              className="w-full" 
+                              style={{ height: '32px' }}
+                              onError={(e) => {
+                                console.error('Audio playback error:', e);
+                                // Cleanup the URL on error
+                                if (message.audioUrl) {
+                                  URL.revokeObjectURL(message.audioUrl);
+                                }
+                              }}
+                            >
+                              <source src={message.audioUrl} type="audio/mpeg" />
+                              Your browser does not support audio playback.
+                            </audio>
+                          </div>
+                        )}
+                        
                         <p
                           className={`text-xs mt-2 ${
                             message.sender === "user" ? "text-white/70" : "text-slate-500 dark:text-slate-400"
@@ -628,6 +831,7 @@ export default function SessionPage() {
                   size="sm"
                   onClick={() => handleModeChange('voice')}
                   className="flex items-center space-x-1"
+                  disabled={true}
                 >
                   <Phone className="h-4 w-4" />
                   <span className="hidden sm:inline">Voice</span>
@@ -637,6 +841,7 @@ export default function SessionPage() {
                   size="sm"
                   onClick={() => handleModeChange('video')}
                   className="flex items-center space-x-1"
+                  disabled={true}
                 >
                   <Video className="h-4 w-4" />
                   <span className="hidden sm:inline">Video</span>
@@ -717,16 +922,6 @@ export default function SessionPage() {
                   </>
                 )}
                 
-                {sessionMode === 'text' && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className={`rounded-xl h-10 w-10 p-0 flex-shrink-0 ${isRecording ? "bg-red-50 border-red-200 text-red-600" : ""}`}
-                    onClick={toggleRecording}
-                  >
-                    <Mic className="h-4 w-4" />
-                  </Button>
-                )}
               </div>
 
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mt-3 text-xs text-slate-500 space-y-1 sm:space-y-0">

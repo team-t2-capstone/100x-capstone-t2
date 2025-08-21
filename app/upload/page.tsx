@@ -14,13 +14,23 @@ import { DocumentManager } from '@/components/upload/document-manager'
 import { useAuth } from '@/contexts/auth-context'
 import { useEffect } from 'react'
 import { createClient } from '@/utils/supabase/client'
+import { useRouter } from 'next/navigation'
 
 export default function UploadPage() {
   const { user } = useAuth()
+  const router = useRouter()
   const [selectedCloneId, setSelectedCloneId] = useState<string>('')
   const [refreshTrigger, setRefreshTrigger] = useState(0)
   const [clones, setClones] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+
+  // Redirect non-creator users
+  useEffect(() => {
+    if (user && user.role !== 'creator') {
+      router.push('/discover')
+      return
+    }
+  }, [user, router])
 
   const handleUploadComplete = (documents: any[]) => {
     console.log('Upload completed:', documents)
@@ -128,6 +138,19 @@ export default function UploadPage() {
         <Card>
           <CardContent className="text-center py-12">
             <p>Please log in to upload documents.</p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  // Don't render content for non-creator users
+  if (user && user.role !== 'creator') {
+    return (
+      <div className="container mx-auto py-8">
+        <Card>
+          <CardContent className="p-6 text-center">
+            <p>Redirecting...</p>
           </CardContent>
         </Card>
       </div>

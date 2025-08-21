@@ -606,6 +606,7 @@ export function EnhancedDocumentUpload({
                             document.status === 'completed' ? 'bg-green-100 text-green-800' :
                             document.status === 'processing' ? 'bg-blue-100 text-blue-800' :
                             document.status === 'failed' ? 'bg-red-100 text-red-800' :
+                            document.status === 'uploaded' ? 'bg-blue-50 text-blue-700' :
                             'bg-gray-100 text-gray-800'
                           }
                         >
@@ -780,17 +781,17 @@ export function EnhancedDocumentUpload({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Remove Document</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to remove "{documentToRemove?.name || 'this document'}"? 
-              This action will:
-              <ul className="list-disc list-inside mt-2 space-y-1">
-                <li>Delete the document from storage</li>
-                <li>Remove associated AI assistants</li>
-                <li>Delete vector store embeddings</li>
-                <li>Update the expert's knowledge base</li>
-              </ul>
-              <br />
-              <strong>This action cannot be undone.</strong>
+            <AlertDialogDescription asChild>
+              <div>
+                <p>Are you sure you want to remove "{documentToRemove?.name || 'this document'}"? This action will:</p>
+                <ul className="list-disc list-inside mt-2 space-y-1">
+                  <li>Delete the document from storage</li>
+                  <li>Remove associated AI assistants</li>
+                  <li>Delete vector store embeddings</li>
+                  <li>Update the expert's knowledge base</li>
+                </ul>
+                <p className="mt-2"><strong>This action cannot be undone.</strong></p>
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -33,6 +33,7 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { motion } from "framer-motion"
+import FindClonesSection from '@/components/dashboard/find-clones-section'
 
 const expertTypes = {
   medical: { color: "bg-emerald-500", icon: Stethoscope, name: "Health & Wellness" },
@@ -665,131 +666,7 @@ function DashboardPageContent() {
           </TabsContent>
 
           <TabsContent value="clones" className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Find & Start Sessions with AI Clones</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                {/* Search and Filter */}
-                <div className="flex flex-col sm:flex-row gap-4">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 h-4 w-4" />
-                    <Input
-                      placeholder="Search clones by name or specialty..."
-                      value={cloneSearchQuery}
-                      onChange={(e) => setCloneSearchQuery(e.target.value)}
-                      className="pl-10"
-                    />
-                  </div>
-                  <Select value={selectedCloneCategory} onValueChange={setSelectedCloneCategory}>
-                    <SelectTrigger className="w-full sm:w-48">
-                      <SelectValue placeholder="All Categories" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Categories</SelectItem>
-                      {Object.entries(expertTypes).map(([key, type]) => (
-                        <SelectItem key={key} value={key}>
-                          <div className="flex items-center space-x-2">
-                            <type.icon className="h-4 w-4" />
-                            <span>{type.name}</span>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Clone List */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {filteredClones.map((clone) => {
-                    const typeConfig = expertTypes[clone.type as keyof typeof expertTypes]
-                    return (
-                      <Card key={clone.id} className="hover:shadow-lg transition-all duration-300">
-                        <CardContent className="p-6">
-                          <div className="flex items-center space-x-4 mb-4">
-                            <div className="relative">
-                              <Avatar className="h-12 w-12">
-                                <AvatarImage src={clone.avatar || "/placeholder.svg"} alt={clone.name} />
-                                <AvatarFallback>
-                                  {clone.name
-                                    .split(" ")
-                                    .map((n) => n[0])
-                                    .join("")}
-                                </AvatarFallback>
-                              </Avatar>
-                              <div className={`absolute -bottom-1 -right-1 ${typeConfig.color} rounded-full p-1`}>
-                                <typeConfig.icon className="h-3 w-3 text-white" />
-                              </div>
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <h3 className="font-semibold text-slate-900 dark:text-white truncate">
-                                {clone.name}
-                                {clone.featured && (
-                                  <Badge className="ml-2 bg-gradient-to-r from-yellow-400 to-orange-500 text-white text-xs">
-                                    Featured
-                                  </Badge>
-                                )}
-                              </h3>
-                              <p className="text-sm text-slate-600 dark:text-slate-300 truncate">{clone.specialty}</p>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center justify-between mb-4">
-                            <div className="flex items-center space-x-1">
-                              <Star className="h-4 w-4 text-yellow-500 fill-current" />
-                              <span className="text-sm font-medium">{clone.rating}</span>
-                              <span className="text-sm text-slate-500">({clone.sessions})</span>
-                            </div>
-                            <Badge variant="secondary" className={`${typeConfig.color} text-white text-xs`}>
-                              {typeConfig.name}
-                            </Badge>
-                          </div>
-
-                          <div className="flex items-center justify-between mb-4">
-                            <span className="text-sm text-green-600">{clone.availability}</span>
-                            <div className="text-right">
-                              <span className="text-lg font-semibold text-slate-900 dark:text-white">
-                                ${clone.priceFrom}-${clone.priceTo}
-                              </span>
-                              <span className="text-sm text-slate-500 block">/session</span>
-                            </div>
-                          </div>
-
-                          <div className="flex space-x-2">
-                            <Link href={`/chat/${clone.id}`} className="flex-1">
-                              <Button className="w-full" size="sm">
-                                <MessageCircle className="h-4 w-4 mr-2" />
-                                Chat
-                              </Button>
-                            </Link>
-                            <Link href={`/voice/${clone.id}`}>
-                              <Button variant="outline" size="sm">
-                                <Mic className="h-4 w-4" />
-                              </Button>
-                            </Link>
-                            <Link href={`/video/${clone.id}`}>
-                              <Button variant="outline" size="sm">
-                                <Video className="h-4 w-4" />
-                              </Button>
-                            </Link>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    )
-                  })}
-                </div>
-
-                {filteredClones.length === 0 && (
-                  <div className="text-center py-12">
-                    <Search className="h-12 w-12 text-slate-400 mx-auto mb-4" />
-                    <h3 className="text-lg font-medium text-slate-900 dark:text-white mb-2">No clones found</h3>
-                    <p className="text-slate-600 dark:text-slate-300">
-                      Try adjusting your search criteria or browse all categories
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+            <FindClonesSection />
           </TabsContent>
 
           <TabsContent value="sessions" className="space-y-6">

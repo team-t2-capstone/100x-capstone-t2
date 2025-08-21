@@ -172,8 +172,8 @@ export function MemoryLayerControl({
         {/* Document Summary */}
         <div className="bg-gray-50 rounded-lg p-3">
           <div className="flex items-center justify-between text-sm">
-            <span className="text-gray-600">Documents Ready:</span>
-            <span className="font-medium">{documentCount} files</span>
+            <span className="text-gray-600">Knowledge Items:</span>
+            <span className="font-medium">{documentCount}</span>
           </div>
           {ragDocCount > 0 && ragDocCount !== documentCount && (
             <div className="flex items-center justify-between text-sm">
@@ -253,8 +253,8 @@ export function MemoryLayerControl({
 
             <div className="grid grid-cols-3 gap-2 text-center">
               <div className="bg-blue-50 rounded-lg p-2">
-                <div className="font-medium text-lg text-blue-600">{ragDocCount}</div>
-                <div className="text-xs text-blue-600">Documents</div>
+                <div className="font-medium text-lg text-blue-600">{documentCount}</div>
+                <div className="text-xs text-blue-600">Items</div>
               </div>
               <div className="bg-purple-50 rounded-lg p-2">
                 <div className="font-medium text-lg text-purple-600">Ready</div>

@@ -2129,6 +2129,7 @@ async def delete_document(
         document = knowledge_result.data[0]
         
         # 1. Delete file from storage if it exists
+        storage_path = None
         if document.get("file_url"):
             try:
                 # Extract storage path from file_url
@@ -2137,7 +2138,7 @@ async def delete_document(
                     cleanup_response = service_supabase.storage.from_("knowledge-documents").remove([storage_path])
                     logger.info("File deleted from storage", path=storage_path, response=cleanup_response)
             except Exception as storage_error:
-                logger.warning("Failed to delete file from storage", error=str(storage_error), path=storage_path)
+                logger.warning("Failed to delete file from storage", error=str(storage_error), path=storage_path or document.get("file_url", "unknown"))
         
         # 2. Delete OpenAI resources (vector store and assistants) if they exist
         if document.get("openai_vector_store_id") or document.get("openai_assistant_id"):

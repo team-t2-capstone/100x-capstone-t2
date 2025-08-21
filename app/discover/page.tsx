@@ -39,6 +39,53 @@ const expertTypes = {
   coaching: { color: "bg-orange-500", icon: Heart, name: "Life & Coaching" },
   legal: { color: "bg-indigo-900", icon: Scale, name: "Legal & Consulting" },
   ai: { color: "bg-cyan-600", icon: Cpu, name: "AI" },
+  "communication & networking": { color: "bg-green-600", icon: MessageCircle, name: "Communication & Networking" },
+}
+
+// Function to get type config with fallback
+const getTypeConfig = (category: string) => {
+  const normalizedCategory = category?.toLowerCase().replace(/[^a-z0-9]/g, '')
+  
+  // Try exact match first
+  if (expertTypes[category as keyof typeof expertTypes]) {
+    return expertTypes[category as keyof typeof expertTypes]
+  }
+  
+  // Try normalized match
+  const foundKey = Object.keys(expertTypes).find(key => 
+    key.replace(/[^a-z0-9]/g, '') === normalizedCategory
+  )
+  
+  if (foundKey) {
+    return expertTypes[foundKey as keyof typeof expertTypes]
+  }
+  
+  // Try partial matches for common patterns
+  const categoryLower = category?.toLowerCase() || ''
+  if (categoryLower.includes('medical') || categoryLower.includes('health')) {
+    return expertTypes.medical
+  }
+  if (categoryLower.includes('business') || categoryLower.includes('strategy')) {
+    return expertTypes.business
+  }
+  if (categoryLower.includes('education') || categoryLower.includes('learning')) {
+    return expertTypes.education
+  }
+  if (categoryLower.includes('finance') || categoryLower.includes('investment')) {
+    return expertTypes.finance
+  }
+  if (categoryLower.includes('coaching') || categoryLower.includes('life')) {
+    return expertTypes.coaching
+  }
+  if (categoryLower.includes('legal') || categoryLower.includes('consulting')) {
+    return expertTypes.legal
+  }
+  if (categoryLower.includes('communication') || categoryLower.includes('networking')) {
+    return expertTypes["communication & networking"]
+  }
+  
+  // Default fallback
+  return expertTypes.ai
 }
 
 // Mock data removed - now using real Supabase data
@@ -89,8 +136,7 @@ export default function DiscoverPage() {
           .from('clones')
           .select('*', { count: 'exact' })
           .eq('is_active', true)
-          // For development: show all active clones regardless of publish status
-          // .eq('is_published', true)
+          .eq('is_published', true) // Only show published clones for users
 
         // Add category filter
         if (selectedCategory !== 'all') {
@@ -350,7 +396,7 @@ export default function DiscoverPage() {
             <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-6">Featured Experts</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {featuredExperts.map((expert, index) => {
-                const typeConfig = expertTypes[expert.type as keyof typeof expertTypes]
+                const typeConfig = getTypeConfig(expert.type)
                 return (
                   <motion.div
                     key={expert.id}
@@ -443,7 +489,7 @@ export default function DiscoverPage() {
             <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-6">All Experts</h2>
             <div className={viewMode === "grid" ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" : "space-y-4"}>
               {regularExperts.map((expert, index) => {
-                const typeConfig = expertTypes[expert.type as keyof typeof expertTypes]
+                const typeConfig = getTypeConfig(expert.type)
 
                 if (viewMode === "list") {
                   return (

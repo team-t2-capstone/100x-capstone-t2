@@ -37,7 +37,7 @@ class VoiceCallResponse(BaseSchema):
     session_id: str
     clone_id: str
     response_text: str
-    audio_url: str
+    audio_url: Optional[str] = None
     duration_seconds: float
     timestamp: datetime
 
@@ -121,23 +121,34 @@ async def process_voice_message(
         )
 
         # Synthesize speech for the AI response
-        audio_data = await synthesize_clone_speech(
-            text=ai_response["content"],
-            clone_id=request.clone_id,
-            clone_category=clone.category
-        )
+        try:
+            audio_data = await synthesize_clone_speech(
+                text=ai_response["content"],
+                clone_id=request.clone_id,
+                clone_category=clone.category
+            )
+            has_audio = True
+        except ValueError as e:
+            if "Cannot generate audio for longer responses" in str(e):
+                # Response too long for voice generation
+                audio_data = b''
+                has_audio = False
+                logger.info(f"Response too long for voice synthesis: {len(ai_response['content'])} characters")
+            else:
+                raise e
 
         # Save audio to temporary location and create URL
         # In production, upload to cloud storage (S3, GCS)
         import tempfile
         import base64
         
-        audio_filename = f"call_audio_{session_id}_{uuid4().hex[:8]}.mp3"
-        audio_url = f"/api/v1/calls/audio/{audio_filename}"
-        
-        # Store audio data (in production, use proper storage)
-        # For now, we'll return it as base64 in the response
-        audio_base64 = base64.b64encode(audio_data).decode()
+        if has_audio and audio_data:
+            audio_filename = f"call_audio_{session_id}_{uuid4().hex[:8]}.mp3"
+            audio_url = f"/api/v1/calls/audio/{audio_filename}"
+            audio_base64 = base64.b64encode(audio_data).decode()
+        else:
+            audio_url = None
+            audio_base64 = ""
 
         # Save message to database
         user_message = Message(
@@ -156,8 +167,10 @@ async def process_voice_message(
             metadata={
                 "message_type": "voice",
                 "audio_url": audio_url,
-                "audio_duration": len(audio_data) / 1000,  # Rough estimate
-                "tokens_used": ai_response.get("tokens_used", 0)
+                "audio_duration": len(audio_data) / 1000 if audio_data else 0,
+                "tokens_used": ai_response.get("tokens_used", 0),
+                "has_audio": has_audio,
+                "audio_error": "Response too long for audio generation" if not has_audio else None
             }
         )
         
@@ -181,8 +194,8 @@ async def process_voice_message(
             session_id=session_id,
             clone_id=request.clone_id,
             response_text=ai_response["content"],
-            audio_url=f"data:audio/mp3;base64,{audio_base64}",  # Return as data URI for demo
-            duration_seconds=len(audio_data) / 1000,  # Rough estimate
+            audio_url=f"data:audio/mp3;base64,{audio_base64}" if has_audio else None,  # Return as data URI for demo
+            duration_seconds=len(audio_data) / 1000 if audio_data else 0,  # Rough estimate
             timestamp=datetime.utcnow()
         )
 

@@ -109,14 +109,14 @@ async def initialize_expert_memory(request: InitializeExpertMemoryRequest):
         pdf_documents = {}
         
         for item in knowledge_result.data:
-            if item.get("content_type") == "file" and item.get("file_url"):
-                if item.get("file_type") == "pdf":
-                    # For PDFs, we'll pass the URL and let the backend handle download
-                    document_urls[item.get("title", item.get("file_name", "unknown"))] = item["file_url"]
-                else:
-                    document_urls[item.get("title", item.get("file_name", "unknown"))] = item["file_url"]
-            elif item.get("content_type") == "url" and item.get("original_url"):
-                document_urls[item.get("title", "unknown")] = item["original_url"]
+            if item.get("content_type") == "document" and item.get("file_url"):
+                # Documents (uploaded files)
+                title = item.get("title") or item.get("file_name") or "unknown"
+                document_urls[title] = item["file_url"]
+            elif item.get("content_type") == "link" and item.get("file_url"):
+                # Links (web URLs) - use file_url as it's consistently populated
+                title = item.get("title") or "unknown"
+                document_urls[title] = item["file_url"]
         
         print(f"Fetched: domain={domain_name}, qa_pairs={len(qa_pairs)}, documents={len(document_urls)}")
         

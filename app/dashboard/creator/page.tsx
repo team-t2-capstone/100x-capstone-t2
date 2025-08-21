@@ -29,6 +29,9 @@ import {
   AlertCircle,
   RefreshCw,
   Trash2,
+  Upload,
+  Globe,
+  Send,
 } from "lucide-react"
 import Link from "next/link"
 import { motion } from "framer-motion"
@@ -135,6 +138,35 @@ export default function CreatorDashboardPage() {
         }
       } catch (error) {
         console.error('Unexpected error during clone deletion:', error);
+      }
+    }
+  }
+
+  const handlePublishClone = async (cloneId: string, isPublished: boolean) => {
+    if (isPublished) {
+      alert('Clone has been published and cannot be edited now.')
+      return
+    }
+
+    if (window.confirm('Are you sure you want to publish this clone? Once published, you cannot edit the clone data anymore.')) {
+      try {
+        const response = await fetch(`/api/clones/${cloneId}/publish`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        })
+
+        if (response.ok) {
+          console.log('Clone published successfully');
+          refresh() // Refresh dashboard data
+        } else {
+          const errorData = await response.json()
+          alert(`Failed to publish clone: ${errorData.message || 'Unknown error'}`)
+        }
+      } catch (error) {
+        console.error('Unexpected error during clone publishing:', error);
+        alert('Failed to publish clone. Please try again.')
       }
     }
   }
@@ -299,7 +331,7 @@ export default function CreatorDashboardPage() {
                               </div>
                               <div className="flex-1 min-w-0">
                                 <h3 className="font-semibold text-slate-900 dark:text-white truncate">{clone.name}</h3>
-                                <div className="flex items-center space-x-2">
+                                <div className="flex items-center space-x-2 flex-wrap">
                                   <Badge
                                     variant={clone.status === "active" ? "default" : "secondary"}
                                     className={
@@ -316,6 +348,14 @@ export default function CreatorDashboardPage() {
                                   >
                                     {getCloneStatus(clone) === 'completed' ? 'Completed' : 'In Progress'}
                                   </Badge>
+                                  {clone.is_published && (
+                                    <Badge
+                                      variant="default"
+                                      className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+                                    >
+                                      Published
+                                    </Badge>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -347,12 +387,24 @@ export default function CreatorDashboardPage() {
                                   </Button>
                                 </Link>
                               ) : (
-                                <Link href={`/create-clone/wizard?clone_id=${clone.id}&step=6`} className="flex-1">
-                                  <Button variant="outline" size="sm" className="w-full bg-transparent">
-                                    <Eye className="h-4 w-4 mr-2" />
-                                    View
+                                <>
+                                  <Link href={`/create-clone/wizard?clone_id=${clone.id}&step=6`} className="flex-1">
+                                    <Button variant="outline" size="sm" className="w-full bg-transparent">
+                                      <Eye className="h-4 w-4 mr-2" />
+                                      View
+                                    </Button>
+                                  </Link>
+                                  <Button 
+                                    variant={clone.is_published ? "secondary" : "default"}
+                                    size="sm" 
+                                    className={clone.is_published ? "bg-green-100 text-green-800 cursor-not-allowed" : ""}
+                                    onClick={() => handlePublishClone(clone.id, clone.is_published)}
+                                    disabled={clone.is_published || cloneActionLoading}
+                                    title={clone.is_published ? "Already published" : "Publish clone"}
+                                  >
+                                    <Globe className="h-4 w-4" />
                                   </Button>
-                                </Link>
+                                </>
                               )}
                               <Button 
                                 variant="outline" 
@@ -485,6 +537,14 @@ export default function CreatorDashboardPage() {
                             >
                               {getCloneStatus(clone) === 'completed' ? 'Completed' : 'In Progress'}
                             </Badge>
+                            {clone.is_published && (
+                              <Badge
+                                variant="default"
+                                className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+                              >
+                                Published
+                              </Badge>
+                            )}
                           </div>
                         </div>
                         <Button variant="ghost" size="sm">
@@ -553,9 +613,21 @@ export default function CreatorDashboardPage() {
                           variant="outline" 
                           size="sm" 
                           className="bg-transparent"
-                          onClick={() => window.location.href = `/create-clone/wizard?edit=${clone.id}`}
+                          onClick={() => clone.is_published ? handlePublishClone(clone.id, clone.is_published) : (window.location.href = `/create-clone/wizard?edit=${clone.id}`)}
+                          disabled={clone.is_published}
+                          title={clone.is_published ? "Clone is published and cannot be edited" : "Edit clone"}
                         >
                           <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button 
+                          variant={clone.is_published ? "secondary" : "default"}
+                          size="sm" 
+                          className={clone.is_published ? "bg-green-100 text-green-800 cursor-not-allowed" : ""}
+                          onClick={() => handlePublishClone(clone.id, clone.is_published)}
+                          disabled={clone.is_published || cloneActionLoading}
+                          title={clone.is_published ? "Already published" : "Publish clone"}
+                        >
+                          <Globe className="h-4 w-4" />
                         </Button>
                         <Button 
                           variant="outline" 
