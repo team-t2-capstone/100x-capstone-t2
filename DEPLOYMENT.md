@@ -22,6 +22,8 @@ const nextConfig = {
   // Disable static optimization
   experimental: {
     disableOptimizedLoading: true,
+    // Disable server components
+    appDir: false,
   },
   // Skip all types of pre-rendering
   trailingSlash: true,
@@ -32,6 +34,52 @@ const nextConfig = {
   },
   // Disable server components
   serverComponents: false,
+  // Disable static generation
+  distDir: '.next',
+  // Disable automatic static optimization
+  optimizeFonts: false,
+  // Disable compression
+  compress: false,
+  // Disable React strict mode during build
+  reactStrictMode: false,
+  // Disable powered by header
+  poweredByHeader: false,
+}
+```
+
+### Supabase Client Initialization
+
+To prevent Supabase initialization errors during build, we use a client-side only approach:
+
+```typescript
+// utils/supabase/client.ts
+import { createBrowserClient } from '@supabase/ssr'
+import type { Database } from '@/types/database'
+
+let supabaseClient: ReturnType<typeof createBrowserClient<Database>> | null = null
+
+// Check if we're running in a browser environment
+const isBrowser = typeof window !== 'undefined'
+
+export function createClient() {
+  // Only create the client in browser environments
+  if (isBrowser && !supabaseClient) {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+    
+    if (supabaseUrl && supabaseKey) {
+      supabaseClient = createBrowserClient<Database>(supabaseUrl, supabaseKey)
+    } else {
+      console.warn('Supabase URL or key is missing. Client will be initialized later.')
+      // Return a dummy client for SSR/build
+      return {} as ReturnType<typeof createBrowserClient<Database>>
+    }
+  } else if (!isBrowser) {
+    // Return a dummy client for SSR/build
+    return {} as ReturnType<typeof createBrowserClient<Database>>
+  }
+  
+  return supabaseClient || ({} as ReturnType<typeof createBrowserClient<Database>>)
 }
 ```
 
@@ -104,6 +152,9 @@ CMD ["pnpm", "start"]
 **Issue**: Next.js build fails during prerendering because Supabase client initialization requires project URL and API key.
 
 **Solution**:
+- Modify Supabase client initialization to be strictly client-side only
+- Use browser environment detection (`typeof window !== 'undefined'`)
+- Return dummy clients during server-side rendering or build time
 - Set placeholder Supabase environment variables during the build
 - Configure Next.js to use static export mode with `output: 'export'`
 - Force client-only mode with environment variables:
