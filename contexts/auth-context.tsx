@@ -67,8 +67,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
-  // Create stable supabase client - moved outside of render cycle
-  const supabase = React.useMemo(() => createClient(), []);
+  // Create stable supabase client only in browser environment
+  const supabase = React.useMemo(() => {
+    // Check if we're in a browser environment
+    const isBrowser = typeof window !== 'undefined';
+    if (!isBrowser) {
+      // Return dummy client during SSR/build
+      return {} as ReturnType<typeof createClient>;
+    }
+    return createClient();
+  }, []);
 
   const clearError = useCallback(() => {
     setError(null);
@@ -77,10 +85,18 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   // Initialize auth state on mount using Supabase session
   const initializeAuth = useCallback(async () => {
     try {
+      // Check if we're in a browser environment
+      const isBrowser = typeof window !== 'undefined';
+      if (!isBrowser) {
+        // Skip initialization during SSR/build
+        setLoading(false);
+        return;
+      }
+      
       console.log('[AUTH] Initializing auth state...');
       
       // Get current session from Supabase
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      const { data: { session }, error: sessionError } = await supabase.auth?.getSession?.() || { data: { session: null }, error: null };
       
       if (sessionError) {
         console.error('Session error during init:', sessionError);
@@ -97,18 +113,20 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         
         // Fetch user profile from database
         const { data: profile, error: profileError } = await supabase
-          .from('user_profiles')
-          .select('*')
-          .eq('id', session.user.id)
-          .single();
+          .from?.('user_profiles')
+          ?.select?.('*')
+          ?.eq?.('id', session.user.id)
+          ?.single?.() || { data: null, error: new Error('Supabase client not available') };
         
         if (profileError) {
           console.error('Failed to fetch user profile:', profileError);
           // If profile doesn't exist, user might need to complete signup
           setUser(null);
-        } else {
-          console.log('[AUTH] Successfully loaded user profile:', profile.full_name);
-          setUser(profile);
+        } else if (profile) {
+          // Type assertion to avoid TypeScript errors
+          const typedProfile = profile as unknown as User;
+          console.log('[AUTH] Successfully loaded user profile:', typedProfile.full_name);
+          setUser(typedProfile);
         }
       } else {
         console.log('[AUTH] No active session found');
@@ -174,6 +192,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   // Login function using Supabase directly
   const login = useCallback(async (credentials: LoginRequest) => {
     try {
+      // Check if we're in a browser environment
+      const isBrowser = typeof window !== 'undefined';
+      if (!isBrowser) {
+        throw new Error('Cannot login during server-side rendering');
+      }
+      
       console.log('Starting login process for:', credentials.email);
       setLoading(true);
       setError(null);
@@ -199,10 +223,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         console.log('Attempting login with email:', credentials.email);
         
         // Use Supabase client to authenticate
-        authResult = await supabase.auth.signInWithPassword({
+        authResult = await supabase.auth?.signInWithPassword?.({ 
           email: credentials.email.trim().toLowerCase(), // Normalize email
           password: credentials.password,
-        });
+        }) || { data: { session: null }, error: new Error('Supabase client not available') };
       } finally {
         // Always restore console.error
         console.error = originalConsoleError;
@@ -214,7 +238,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         throw authError;
       }
       
-      if (!data.session?.user) {
+      if (!data?.session?.user) {
         console.error('No session returned from login');
         throw new Error('Authentication failed - no session returned');
       }
@@ -223,23 +247,29 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       
       // Fetch user profile from database
       const { data: profile, error: profileError } = await supabase
-        .from('user_profiles')
-        .select('*')
-        .eq('id', data.session.user.id)
-        .single();
+        .from?.('user_profiles')
+        ?.select?.('*')
+        ?.eq?.('id', data.session.user.id)
+        ?.single?.() || { data: null, error: new Error('Supabase client not available') };
       
       if (profileError) {
         throw new Error('Failed to load user profile');
       }
       
-      console.log('Login successful for:', profile.full_name);
+      if (!profile) {
+        throw new Error('User profile not found');
+      }
+      
+      // Type assertion to avoid TypeScript errors
+      const typedProfile = profile as unknown as User;
+      console.log('Login successful for:', typedProfile.full_name);
       
       // Store auth tokens for API client
       if (data.session?.access_token && data.session?.refresh_token) {
         storeAuthTokens(data.session.access_token, data.session.refresh_token);
       }
       
-      setUser(profile);
+      setUser(profile as User);
       
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Login failed';

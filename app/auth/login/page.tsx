@@ -1,4 +1,12 @@
-import { LoginForm } from '@/components/auth/login-form';
+'use client';
+
+import dynamic from 'next/dynamic';
+
+// Dynamically import the login form with SSR disabled
+const LoginForm = dynamic(
+  () => import('@/components/auth/login-form').then((mod) => mod.LoginForm),
+  { ssr: false }
+);
 
 export default function LoginPage() {
   return (
@@ -10,7 +18,4 @@ export default function LoginPage() {
   );
 }
 
-export const metadata = {
-  title: 'Login - CloneAI',
-  description: 'Sign in to your CloneAI account',
-};
+// Metadata is defined in layout.tsx instead to avoid SSR issues

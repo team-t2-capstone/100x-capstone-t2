@@ -1,4 +1,12 @@
-import { ForgotPasswordForm } from '@/components/auth/forgot-password-form';
+'use client';
+
+import dynamic from 'next/dynamic';
+
+// Dynamically import the forgot password form with SSR disabled
+const ForgotPasswordForm = dynamic(
+  () => import('@/components/auth/forgot-password-form').then((mod) => mod.ForgotPasswordForm),
+  { ssr: false }
+);
 
 export default function ForgotPasswordPage() {
   return (
@@ -10,7 +18,4 @@ export default function ForgotPasswordPage() {
   );
 }
 
-export const metadata = {
-  title: 'Reset Password - CloneAI',
-  description: 'Reset your CloneAI account password',
-};
+// Metadata is defined in layout.tsx instead to avoid SSR issues

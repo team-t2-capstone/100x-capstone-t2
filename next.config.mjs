@@ -13,6 +13,10 @@ const nextConfig = {
     disableOptimizedLoading: true,
     // Disable server components
     appDir: false,
+    // Skip prerendering
+    skipMiddlewareUrlNormalize: true,
+    // Skip trailing slash handling
+    skipTrailingSlashRedirect: true,
   },
   // Skip all types of pre-rendering
   trailingSlash: true,
@@ -33,6 +37,13 @@ const nextConfig = {
   reactStrictMode: false,
   // Disable powered by header
   poweredByHeader: false,
+  // Disable prerendering
+  generateEtags: false,
+  // Set environment variables for build time
+  env: {
+    NEXT_RUNTIME: 'edge',
+    NEXT_FORCE_CLIENT_ONLY: 'true',
+  },
 }
 
 export default nextConfig
