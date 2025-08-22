@@ -20,14 +20,18 @@ COPY . .
 # Make sure tsconfig.tsbuildinfo is a regular file, not a directory
 RUN rm -f tsconfig.tsbuildinfo && touch tsconfig.tsbuildinfo
 
-# Set dummy environment variables for build time only
+# Set environment variables for build time
 # These are placeholder values just to allow the build to complete
 ENV NEXT_PUBLIC_SUPABASE_URL="https://placeholder-value.supabase.co"
 ENV NEXT_PUBLIC_SUPABASE_ANON_KEY="placeholder-key-for-build-only"
 ENV NEXT_PUBLIC_SITE_URL="https://placeholder-site-url.com"
 ENV OPENAI_API_KEY="placeholder-openai-key"
 
-# Build the application
+# Force client-only mode for Next.js
+ENV NEXT_RUNTIME="edge"
+ENV NEXT_FORCE_CLIENT_ONLY="true"
+
+# Build the application in static export mode
 RUN pnpm run build
 
 # Set runtime environment variables

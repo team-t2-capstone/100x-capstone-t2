@@ -6,16 +6,21 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  images: {
-    unoptimized: true,
-  },
-  // Disable SSR and static generation for build process
+  // Completely disable SSR and static generation
   output: 'export',
   // Disable static optimization
   experimental: {
-    // Disable static optimization
     disableOptimizedLoading: true,
   },
+  // Skip all types of pre-rendering
+  trailingSlash: true,
+  // Disable image optimization
+  images: {
+    unoptimized: true,
+    disableStaticImages: true,
+  },
+  // Disable server components
+  serverComponents: false,
 }
 
 export default nextConfig
