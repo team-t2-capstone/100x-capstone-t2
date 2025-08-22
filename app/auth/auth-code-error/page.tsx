@@ -1,3 +1,5 @@
+'use client';
+
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -48,7 +50,4 @@ export default function AuthCodeError() {
   )
 }
 
-export const metadata = {
-  title: 'Authentication Error - CloneAI',
-  description: 'There was an error with your authentication link',
-}
+// Metadata is defined in layout.tsx instead to avoid SSR issues

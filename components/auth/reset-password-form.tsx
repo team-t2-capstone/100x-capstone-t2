@@ -34,7 +34,8 @@ export function ResetPasswordForm() {
   
   const router = useRouter();
   const searchParams = useSearchParams();
-  const supabase = createClient();
+  // Initialize Supabase client lazily to ensure it only happens on the client side
+  const [supabase] = useState(() => createClient());
 
   const form = useForm<ResetPasswordFormData>({
     resolver: zodResolver(resetPasswordSchema),

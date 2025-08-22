@@ -1,4 +1,12 @@
-import { ResetPasswordForm } from '@/components/auth/reset-password-form';
+'use client';
+
+import dynamic from 'next/dynamic';
+
+// Dynamically import the reset password form with SSR disabled
+const ResetPasswordForm = dynamic(
+  () => import('@/components/auth/reset-password-form').then((mod) => mod.ResetPasswordForm),
+  { ssr: false }
+);
 
 export default function ResetPasswordPage() {
   return (
@@ -10,7 +18,4 @@ export default function ResetPasswordPage() {
   );
 }
 
-export const metadata = {
-  title: 'Set New Password - CloneAI',
-  description: 'Set a new password for your CloneAI account',
-};
+// Metadata is defined in layout.tsx instead to avoid SSR issues

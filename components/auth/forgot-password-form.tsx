@@ -24,7 +24,8 @@ export function ForgotPasswordForm() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const supabase = createClient();
+  // Initialize Supabase client lazily to ensure it only happens on the client side
+  const [supabase] = useState(() => createClient());
 
   const form = useForm<ForgotPasswordFormData>({
     resolver: zodResolver(forgotPasswordSchema),
