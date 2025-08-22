@@ -1,6 +1,12 @@
 'use client';
 
-import { VoiceTraining } from '@/components/voice-training';
+import dynamic from 'next/dynamic';
+
+// Dynamically import the VoiceTraining component with SSR disabled
+const VoiceTraining = dynamic(
+  () => import('@/components/voice-training').then((mod) => mod.VoiceTraining),
+  { ssr: false }
+);
 
 export default function TestVoicePage() {
   return (

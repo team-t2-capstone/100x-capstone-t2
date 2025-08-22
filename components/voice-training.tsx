@@ -49,16 +49,18 @@ export function VoiceTraining({
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Initialize Supabase client lazily to ensure it only happens on the client side
+  const [supabaseClient] = useState(() => createClient());
+
   // Helper function to get authentication token
   const getAuthToken = async (): Promise<string | null> => {
     // First try cookies
-    let token = getAuthTokens().accessToken;
+    let token = getAuthTokens().accessToken || null;
     
     // If no token in cookies, try Supabase session
     if (!token) {
       try {
-        const supabase = createClient();
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session } } = await supabaseClient.auth.getSession();
         if (session?.access_token) {
           token = session.access_token;
         }
