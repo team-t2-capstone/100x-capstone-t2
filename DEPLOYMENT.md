@@ -163,6 +163,24 @@ CMD ["pnpm", "start"]
   ENV NEXT_FORCE_CLIENT_ONLY="true"
   ```
 - Configure real environment variables in Railway dashboard for runtime
+- For pages that use Supabase client (like settings page), use dynamic imports with SSR disabled:
+  ```typescript
+  // app/settings/page.tsx
+  import dynamic from 'next/dynamic'
+  
+  const ClientSettingsPage = dynamic(() => import('./settings-client'), {
+    ssr: false,
+    loading: () => (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div>Loading settings...</div>
+      </div>
+    )
+  })
+  
+  export default function SettingsPage() {
+    return <ClientSettingsPage />
+  }
+  ```
 
 ### 3. pnpm-lock.yaml Mismatch
 
