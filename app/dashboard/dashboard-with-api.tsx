@@ -119,7 +119,7 @@ function DashboardContent() {
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white mb-2">
-            Welcome back, {user?.name || 'User'}!
+            Welcome back, {(user as any)?.user_metadata?.full_name || user?.email || 'User'}!
           </h1>
           <p className="text-lg text-slate-600 dark:text-slate-300">
             Your AI learning journey continues
@@ -132,7 +132,6 @@ function DashboardContent() {
             <TabsTrigger value="find-clones">Find Clones</TabsTrigger>
             <TabsTrigger value="sessions">My Sessions</TabsTrigger>
             <TabsTrigger value="favorites">Favorites</TabsTrigger>
-            <TabsTrigger value="billing">Billing</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="space-y-8">
@@ -234,7 +233,9 @@ function DashboardContent() {
                 ) : (
                   <div className="space-y-4">
                     {sessions.slice(0, 3).map((session, index) => {
-                      const typeConfig = expertTypes[session.category as keyof typeof expertTypes]
+                      // Use a default category if not available in the session data
+                      const sessionCategory = (session as any).category || 'education'
+                      const typeConfig = expertTypes[sessionCategory as keyof typeof expertTypes]
                       return (
                         <motion.div
                           key={session.id}
@@ -244,7 +245,7 @@ function DashboardContent() {
                           className="flex flex-col sm:flex-row sm:items-center space-y-4 sm:space-y-0 sm:space-x-4 p-4 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
                         >
                           <Avatar className="h-12 w-12">
-                            <AvatarImage src={session.avatar || "/placeholder.svg"} alt={session.cloneName} />
+                            <AvatarImage src={(session as any).avatar || "/placeholder.svg"} alt={session.cloneName} />
                             <AvatarFallback>
                               {session.cloneName.split(" ").map((n: string) => n[0]).join("")}
                             </AvatarFallback>
@@ -260,7 +261,7 @@ function DashboardContent() {
                               <span>•</span>
                               <span>{session.duration} min</span>
                               <span>•</span>
-                              <span className="text-green-600 font-medium">${session.cost}</span>
+                              <span className="text-green-600 font-medium">${(session as any).cost || session.earnings}</span>
                             </div>
                           </div>
 
@@ -345,7 +346,7 @@ function DashboardContent() {
                         className="flex flex-col sm:flex-row sm:items-center space-y-4 sm:space-y-0 sm:space-x-4 p-4 rounded-lg border border-slate-200 dark:border-slate-700"
                       >
                         <Avatar className="h-12 w-12">
-                          <AvatarImage src={session.avatar || "/placeholder.svg"} alt={session.cloneName} />
+                          <AvatarImage src={(session as any).avatar || "/placeholder.svg"} alt={session.cloneName} />
                           <AvatarFallback>
                             {session.cloneName.split(" ").map((n: string) => n[0]).join("")}
                           </AvatarFallback>
@@ -354,7 +355,7 @@ function DashboardContent() {
                         <div className="flex-1">
                           <h3 className="font-medium text-slate-900 dark:text-white">{session.cloneName}</h3>
                           <div className="text-sm text-slate-600 dark:text-slate-300">
-                            {session.sessionType} • {session.duration} min • ${session.cost}
+                            {session.sessionType} • {session.duration} min • ${(session as any).cost || session.earnings}
                           </div>
                           <p className="text-sm text-slate-500">{session.date}</p>
                         </div>
@@ -421,18 +422,6 @@ function DashboardContent() {
                     ))}
                   </div>
                 )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="billing">
-            <Card>
-              <CardContent className="p-6">
-                <div className="text-center py-8">
-                  <CreditCard className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-slate-500 mb-4">Billing integration coming soon!</p>
-                  <p className="text-sm text-slate-400">This will show your payment history and subscription details.</p>
-                </div>
               </CardContent>
             </Card>
           </TabsContent>

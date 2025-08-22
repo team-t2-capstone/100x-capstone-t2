@@ -160,6 +160,9 @@ export default function HomePage() {
   useEffect(() => {
     const fetchData = async () => {
       try {
+        // Only run on client-side
+        if (typeof window === 'undefined') return;
+        
         // Fetch featured experts
         const supabase = createClient()
         const { data: expertsData, error: expertsError } = await supabase

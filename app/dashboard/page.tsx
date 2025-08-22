@@ -130,20 +130,22 @@ function DashboardPageContent() {
           .order('created_at', { ascending: false })
           .limit(10)
 
+        // Initialize empty arrays for error cases
+        let sessionsData: any[] = []
+        
         if (sessionsError) {
           console.error('Sessions query error:', sessionsError)
           console.error('Sessions error details:', JSON.stringify(sessionsError, null, 2))
           
           // Don't throw error for sessions, continue with empty sessions
           console.warn('Continuing with empty sessions data due to error')
-          sessions = []
         }
 
         // Manually fetch clone data for sessions to avoid FK relationship issues
-        let sessionsWithClones = sessions || []
-        if (sessions && sessions.length > 0) {
+        let sessionsWithClones = sessionsError ? sessionsData : (sessions || [])
+        if (sessionsWithClones && sessionsWithClones.length > 0) {
           // Get unique clone IDs from sessions
-          const cloneIds = [...new Set(sessions.map(s => s.clone_id).filter(Boolean))]
+          const cloneIds = [...new Set(sessionsWithClones.map((s: any) => s.clone_id).filter(Boolean))]
           
           if (cloneIds.length > 0) {
             // Fetch clone data for these IDs
@@ -154,10 +156,10 @@ function DashboardPageContent() {
             
             if (!sessionClonesError && sessionClones) {
               // Create a map for quick lookup
-              const cloneMap = new Map(sessionClones.map(clone => [clone.id, clone]))
+              const cloneMap = new Map(sessionClones.map((clone: any) => [clone.id, clone]))
               
               // Add clone data to sessions
-              sessionsWithClones = sessions.map(session => ({
+              sessionsWithClones = sessionsWithClones.map((session: any) => ({
                 ...session,
                 clones: session.clone_id ? cloneMap.get(session.clone_id) || null : null
               }))
@@ -176,31 +178,33 @@ function DashboardPageContent() {
           .order('average_rating', { ascending: false })
           .limit(20)
 
+        // Initialize empty array for error case
+        let clonesData: any[] = []
+        
         if (clonesError) {
           console.error('Clones query error:', clonesError)
           console.error('Clones error details:', JSON.stringify(clonesError, null, 2))
           
           // Don't throw error for clones, continue with empty clones
           console.warn('Continuing with empty clones data due to error')
-          clones = []
         }
 
         console.log('Sessions data:', sessionsWithClones?.length || 0, 'items')
-        console.log('Clones data:', clones?.length || 0, 'items')
+        console.log('Clones data:', (clonesError ? clonesData : clones)?.length || 0, 'items')
 
         // Calculate monthly stats
         const currentMonth = new Date().getMonth()
         const currentYear = new Date().getFullYear()
-        const monthlySessions = sessionsWithClones?.filter(session => {
+        const monthlySessions = sessionsWithClones?.filter((session: any) => {
           const sessionDate = new Date(session.created_at)
           return sessionDate.getMonth() === currentMonth && 
                  sessionDate.getFullYear() === currentYear
         }) || []
 
         const totalSessions = monthlySessions.length
-        const totalSpent = monthlySessions.reduce((sum, s) => sum + (s.total_cost || 0), 0)
+        const totalSpent = monthlySessions.reduce((sum: number, s: any) => sum + (s.total_cost || 0), 0)
         const averageRating = monthlySessions.length > 0 
-          ? monthlySessions.reduce((sum, s) => sum + (s.user_rating || 0), 0) / monthlySessions.length 
+          ? monthlySessions.reduce((sum: number, s: any) => sum + (s.user_rating || 0), 0) / monthlySessions.length 
           : 0
 
         // Get favorite category
@@ -231,8 +235,8 @@ function DashboardPageContent() {
         }))
 
         // Format available clones
-        console.log('Processing available clones from:', clones?.length || 0, 'total clones')
-        const availableClones = (clones || []).map((clone: any) => ({
+        console.log('Processing available clones from:', (clonesError ? clonesData : clones)?.length || 0, 'total clones')
+        const availableClones = (clonesError ? clonesData : (clones || [])).map((clone: any) => ({
           id: clone.id,
           name: clone.name,
           type: getCategoryType(clone.category),
@@ -247,7 +251,7 @@ function DashboardPageContent() {
         }))
 
         // Get user's most used clones as favorites
-        const cloneUsage = sessions?.reduce((acc: any, session: any) => {
+        const cloneUsage = sessionsWithClones?.reduce((acc: any, session: any) => {
           if (session.clones?.id) {
             acc[session.clones.id] = (acc[session.clones.id] || 0) + 1
           }
@@ -259,11 +263,11 @@ function DashboardPageContent() {
           .slice(0, 3)
           .map(([id]) => id)
 
-        const favoriteClones = availableClones.filter(clone => 
+        const favoriteClones = availableClones.filter((clone: any) => 
           favoriteCloneIds.includes(clone.id)
-        ).map(clone => ({
+        ).map((clone: any) => ({
           ...clone,
-          lastSession: getLastSessionDate(sessions || [], clone.id),
+          lastSession: getLastSessionDate(sessionsWithClones || [], clone.id),
           nextAvailable: 'Available now'
         }))
 
@@ -387,12 +391,11 @@ function DashboardPageContent() {
         </div>
 
         <Tabs value={selectedTab} onValueChange={setSelectedTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-2 sm:grid-cols-5 mb-8">
+          <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 mb-8">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="clones">Find Clones</TabsTrigger>
             <TabsTrigger value="sessions">My Sessions</TabsTrigger>
             <TabsTrigger value="favorites">Favorites</TabsTrigger>
-            <TabsTrigger value="billing">Billing</TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="space-y-8">
@@ -822,78 +825,6 @@ function DashboardPageContent() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="billing" className="space-y-6">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Billing Overview</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-600 dark:text-slate-300">This Month</span>
-                    <span className="text-2xl font-bold text-slate-900 dark:text-white">
-                      ${dashboardData.monthlyStats.totalSpent}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-600 dark:text-slate-300">Sessions</span>
-                    <span className="font-medium">{dashboardData.monthlyStats.totalSessions}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-600 dark:text-slate-300">Average per Session</span>
-                    <span className="font-medium">
-                      ${(dashboardData.monthlyStats.totalSpent / dashboardData.monthlyStats.totalSessions).toFixed(2)}
-                    </span>
-                  </div>
-
-
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Payment Methods</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="text-center py-8 text-slate-500">
-                    <CreditCard className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                    <p>No payment methods added yet</p>
-                  </div>
-                  <Button variant="outline" className="w-full bg-transparent">
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add Payment Method
-                  </Button>
-                </CardContent>
-              </Card>
-            </div>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Recent Transactions</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {dashboardData.recentSessions.map((session) => (
-                    <div
-                      key={session.id}
-                      className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3 border border-slate-200 dark:border-slate-700 rounded-lg space-y-2 sm:space-y-0"
-                    >
-                      <div>
-                        <p className="font-medium">{session.expertName}</p>
-                        <p className="text-sm text-slate-500">
-                          {session.sessionType} • {session.duration}
-                        </p>
-                      </div>
-                      <div className="text-left sm:text-right">
-                        <p className="font-medium">${session.cost}</p>
-                        <p className="text-sm text-slate-500">{session.date}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
         </Tabs>
       </div>
     </div>
